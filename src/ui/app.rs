@@ -1445,6 +1445,9 @@ impl App {
             return Ok(false);
         }
 
+        // Get the current working directory from active panel
+        let cwd = self.active_panel().path.clone();
+
         // Escape file path for shell (handle spaces and special characters)
         let file_path_str = path.to_string_lossy().to_string();
         let escaped_path = shell_escape(&file_path_str);
@@ -1464,8 +1467,11 @@ impl App {
 
             if is_background_mode {
                 // Background mode: spawn and detach (@ prefix)
-                match self.execute_background_command(&command, template) {
-                    Ok(true) => return Ok(true),
+                match self.execute_background_command(&command, template, &cwd) {
+                    Ok(true) => {
+                        self.refresh_panels();
+                        return Ok(true);
+                    }
                     Ok(false) => {
                         // Command failed, error already set in last_error via closure
                         continue;
@@ -1477,8 +1483,11 @@ impl App {
                 }
             } else {
                 // Foreground mode: suspend TUI, run command, restore TUI (default)
-                match self.execute_terminal_command(&command) {
-                    Ok(true) => return Ok(true),
+                match self.execute_terminal_command(&command, &cwd) {
+                    Ok(true) => {
+                        self.refresh_panels();
+                        return Ok(true);
+                    }
                     Ok(false) => {
                         last_error = format!("Command failed: {}", template);
                         continue;
@@ -1497,7 +1506,7 @@ impl App {
 
     /// Execute a command in terminal mode (blocking, inherits stdio)
     /// Suspends the TUI, runs the command, then restores the TUI
-    fn execute_terminal_command(&mut self, command: &str) -> Result<bool, String> {
+    fn execute_terminal_command(&mut self, command: &str, cwd: &std::path::Path) -> Result<bool, String> {
         use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
         use crossterm::cursor::{Hide, Show};
         use crossterm::execute;
@@ -1512,10 +1521,11 @@ impl App {
         print!("\x1B[2J\x1B[H");
         let _ = stdout().flush();
 
-        // Execute command with inherited stdio
+        // Execute command with inherited stdio and active panel's directory as CWD
         let result = std::process::Command::new("sh")
             .arg("-c")
             .arg(command)
+            .current_dir(cwd)
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
@@ -1535,10 +1545,11 @@ impl App {
     }
 
     /// Execute a command in background mode (non-blocking, detached)
-    fn execute_background_command(&self, command: &str, template: &str) -> Result<bool, String> {
+    fn execute_background_command(&self, command: &str, template: &str, cwd: &std::path::Path) -> Result<bool, String> {
         let result = std::process::Command::new("sh")
             .arg("-c")
             .arg(command)
+            .current_dir(cwd)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
