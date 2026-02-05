@@ -6,7 +6,7 @@ mod config;
 use std::io;
 use std::env;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -181,7 +181,8 @@ fn main() -> io::Result<()> {
         crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
         crossterm::cursor::MoveTo(0, 0),
         EnterAlternateScreen,
-        EnableMouseCapture
+        EnableMouseCapture,
+        EnableBracketedPaste
     )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -224,6 +225,7 @@ fn main() -> io::Result<()> {
         terminal.backend_mut(),
         LeaveAlternateScreen,
         DisableMouseCapture,
+        DisableBracketedPaste,
         crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
         crossterm::cursor::MoveTo(0, 0),
         crossterm::cursor::Show
@@ -466,72 +468,83 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Check for key events with timeout
         if event::poll(poll_timeout)? {
-            if let Event::Key(key) = event::read()? {
-                match app.current_screen {
-                    Screen::DualPanel => {
-                        if handle_dual_panel_input(app, key.code, key.modifiers) {
-                            return Ok(());
-                        }
-                    }
-                    Screen::FileViewer => {
-                        ui::file_viewer::handle_input(app, key.code, key.modifiers);
-                    }
-                    Screen::FileEditor => {
-                        ui::file_editor::handle_input(app, key.code, key.modifiers);
-                    }
-                    Screen::FileInfo => {
-                        ui::file_info::handle_input(app, key.code);
-                    }
-                    Screen::ProcessManager => {
-                        ui::process_manager::handle_input(app, key.code);
-                    }
-                    Screen::Help => {
-                        if ui::help::handle_input(app, key.code) {
-                            app.current_screen = Screen::DualPanel;
-                        }
-                    }
-                    Screen::AIScreen => {
-                        if let Some(ref mut state) = app.ai_state {
-                            if ui::ai_screen::handle_input(state, key.code, key.modifiers) {
-                                // Save session to file before leaving
-                                state.save_session_to_file();
-                                app.current_screen = Screen::DualPanel;
-                                app.ai_state = None;
-                                // Refresh panels in case AI modified files
-                                app.refresh_panels();
+            match event::read()? {
+                Event::Key(key) => {
+                    match app.current_screen {
+                        Screen::DualPanel => {
+                            if handle_dual_panel_input(app, key.code, key.modifiers) {
+                                return Ok(());
                             }
                         }
-                    }
-                    Screen::SystemInfo => {
-                        if ui::system_info::handle_input(&mut app.system_info_state, key.code) {
-                            app.current_screen = Screen::DualPanel;
+                        Screen::FileViewer => {
+                            ui::file_viewer::handle_input(app, key.code, key.modifiers);
                         }
-                    }
-                    Screen::ImageViewer => {
-                        // 다이얼로그가 열려있으면 다이얼로그 입력 처리
-                        if app.dialog.is_some() {
-                            ui::dialogs::handle_dialog_input(app, key.code, key.modifiers);
-                        } else {
-                            ui::image_viewer::handle_input(app, key.code);
+                        Screen::FileEditor => {
+                            ui::file_editor::handle_input(app, key.code, key.modifiers);
                         }
-                    }
-                    Screen::SearchResult => {
-                        let should_close = ui::search_result::handle_input(
-                            &mut app.search_result_state,
-                            key.code,
-                        );
-                        if should_close {
-                            if key.code == KeyCode::Enter {
-                                // Enter: 선택한 경로로 이동
-                                app.goto_search_result();
-                            } else {
-                                // Esc: 검색 결과 화면 닫기
-                                app.search_result_state.active = false;
+                        Screen::FileInfo => {
+                            ui::file_info::handle_input(app, key.code);
+                        }
+                        Screen::ProcessManager => {
+                            ui::process_manager::handle_input(app, key.code);
+                        }
+                        Screen::Help => {
+                            if ui::help::handle_input(app, key.code) {
                                 app.current_screen = Screen::DualPanel;
+                            }
+                        }
+                        Screen::AIScreen => {
+                            if let Some(ref mut state) = app.ai_state {
+                                if ui::ai_screen::handle_input(state, key.code, key.modifiers) {
+                                    // Save session to file before leaving
+                                    state.save_session_to_file();
+                                    app.current_screen = Screen::DualPanel;
+                                    app.ai_state = None;
+                                    // Refresh panels in case AI modified files
+                                    app.refresh_panels();
+                                }
+                            }
+                        }
+                        Screen::SystemInfo => {
+                            if ui::system_info::handle_input(&mut app.system_info_state, key.code) {
+                                app.current_screen = Screen::DualPanel;
+                            }
+                        }
+                        Screen::ImageViewer => {
+                            // 다이얼로그가 열려있으면 다이얼로그 입력 처리
+                            if app.dialog.is_some() {
+                                ui::dialogs::handle_dialog_input(app, key.code, key.modifiers);
+                            } else {
+                                ui::image_viewer::handle_input(app, key.code);
+                            }
+                        }
+                        Screen::SearchResult => {
+                            let should_close = ui::search_result::handle_input(
+                                &mut app.search_result_state,
+                                key.code,
+                            );
+                            if should_close {
+                                if key.code == KeyCode::Enter {
+                                    // Enter: 선택한 경로로 이동
+                                    app.goto_search_result();
+                                } else {
+                                    // Esc: 검색 결과 화면 닫기
+                                    app.search_result_state.active = false;
+                                    app.current_screen = Screen::DualPanel;
+                                }
                             }
                         }
                     }
                 }
+                Event::Paste(text) => {
+                    // Handle paste event for AI screen
+                    if let Screen::AIScreen = app.current_screen {
+                        if let Some(ref mut state) = app.ai_state {
+                            ui::ai_screen::handle_paste(state, &text);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }

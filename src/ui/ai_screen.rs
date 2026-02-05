@@ -641,6 +641,45 @@ impl AIScreenState {
         self.cursor_col += 1;
     }
 
+    /// Insert pasted text at cursor position (handles multi-line text)
+    pub fn insert_pasted_text(&mut self, text: &str) {
+        // Split pasted text into lines
+        let lines: Vec<&str> = text.lines().collect();
+
+        if lines.is_empty() {
+            return;
+        }
+
+        // Get current line content
+        let current_line = &self.input_lines[self.cursor_line];
+        let before: String = current_line.chars().take(self.cursor_col).collect();
+        let after: String = current_line.chars().skip(self.cursor_col).collect();
+
+        if lines.len() == 1 {
+            // Single line paste: insert at cursor position
+            self.input_lines[self.cursor_line] = format!("{}{}{}", before, lines[0], after);
+            self.cursor_col += lines[0].chars().count();
+        } else {
+            // Multi-line paste
+            // First line: combine with text before cursor
+            self.input_lines[self.cursor_line] = format!("{}{}", before, lines[0]);
+
+            // Middle lines: insert as new lines
+            for (i, line) in lines.iter().enumerate().skip(1).take(lines.len() - 2) {
+                self.input_lines.insert(self.cursor_line + i, line.to_string());
+            }
+
+            // Last line: combine with text after cursor
+            let last_line = lines[lines.len() - 1];
+            let last_line_content = format!("{}{}", last_line, after);
+            self.input_lines.insert(self.cursor_line + lines.len() - 1, last_line_content);
+
+            // Update cursor position
+            self.cursor_line += lines.len() - 1;
+            self.cursor_col = last_line.chars().count();
+        }
+    }
+
     /// Delete character before cursor (backspace)
     fn backspace(&mut self) {
         if self.cursor_col > 0 {
@@ -1671,6 +1710,13 @@ fn scroll_down(state: &mut AIScreenState, amount: usize) {
 
     // Don't re-enable auto_scroll here - let draw() handle it
     // when it knows the actual max_scroll value
+}
+
+/// Handle paste event for AI screen input
+pub fn handle_paste(state: &mut AIScreenState, text: &str) {
+    if !state.is_processing {
+        state.insert_pasted_text(text);
+    }
 }
 
 pub fn handle_input(state: &mut AIScreenState, code: KeyCode, modifiers: KeyModifiers) -> bool {

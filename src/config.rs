@@ -172,6 +172,12 @@ impl Settings {
             if !dark_theme_path.exists() {
                 let _ = fs::write(&dark_theme_path, Theme::dark().to_json());
             }
+
+            // Create default "dawn of coding.json" if not exists
+            let dawn_theme_path = themes_dir.join("dawn of coding.json");
+            if !dawn_theme_path.exists() {
+                let _ = fs::write(&dawn_theme_path, Theme::dawn_of_coding().to_json());
+            }
         }
 
         // Create default settings.json if not exists
