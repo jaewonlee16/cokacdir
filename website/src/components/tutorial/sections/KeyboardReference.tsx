@@ -159,6 +159,11 @@ export default function KeyboardReference() {
             해당 화면에서 <KeyBadge>H</KeyBadge>를 누르면 그 화면의 단축키를 볼 수 있습니다.
           </TipBox>
 
+          <TipBox variant="note">
+            위 단축키들은 기본 설정입니다. 모든 단축키를 원하는 키로 바꿀 수 있습니다.
+            자세한 방법은 위의 <a href="#keybinding-custom" className="text-accent-cyan underline underline-offset-2 hover:text-accent-cyan/80">단축키 커스터마이징</a> 섹션을 참고하세요.
+          </TipBox>
+
           <div className="mt-8 p-6 bg-bg-card border border-zinc-800 rounded-lg text-center">
             <p className="text-zinc-400 mb-2">
               축하합니다! 튜토리얼을 모두 읽으셨습니다.
@@ -178,6 +183,11 @@ export default function KeyboardReference() {
             These shortcuts are for the main file list screen.
             Each screen (editor, viewer, AI, etc.) has its own shortcuts —
             press <KeyBadge>H</KeyBadge> in any screen to see its available shortcuts.
+          </TipBox>
+
+          <TipBox variant="note">
+            These are the default keybindings. Every shortcut can be remapped to any key you prefer.
+            See the <a href="#keybinding-custom" className="text-accent-cyan underline underline-offset-2 hover:text-accent-cyan/80">Customizing Keybindings</a> section above for details.
           </TipBox>
 
           <div className="mt-8 p-6 bg-bg-card border border-zinc-800 rounded-lg text-center">
