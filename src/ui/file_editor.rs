@@ -2494,19 +2494,20 @@ pub fn draw(frame: &mut Frame, state: &mut EditorState, area: Rect, theme: &Them
 
                 // 단축키 안내 (keybindings에서 동적으로)
                 let shortcuts: Vec<(String, &str)> = vec![
-                    (kb.editor_first_key(EditorAction::Save).to_string(), " save "),
-                    (kb.editor_first_key(EditorAction::DeleteLine).to_string(), " del "),
-                    (kb.editor_first_key(EditorAction::DuplicateLine).to_string(), " dup "),
-                    (kb.editor_first_key(EditorAction::ToggleComment).to_string(), " comment "),
-                    (kb.editor_first_key(EditorAction::SelectNextOccurrence).to_string(), " select "),
-                    (kb.editor_first_key(EditorAction::Find).to_string(), " find "),
-                    (kb.editor_first_key(EditorAction::GotoLine).to_string(), " goto "),
-                    (kb.editor_first_key(EditorAction::ToggleWordWrap).to_string(), " wrap "),
-                    (kb.editor_first_key(EditorAction::Exit).to_string(), " exit"),
+                    (kb.editor_first_key(EditorAction::Save).to_string(), "save "),
+                    (kb.editor_first_key(EditorAction::DeleteLine).to_string(), "del "),
+                    (kb.editor_first_key(EditorAction::DuplicateLine).to_string(), "dup "),
+                    (kb.editor_first_key(EditorAction::ToggleComment).to_string(), "comment "),
+                    (kb.editor_first_key(EditorAction::SelectNextOccurrence).to_string(), "select "),
+                    (kb.editor_first_key(EditorAction::Find).to_string(), "find "),
+                    (kb.editor_first_key(EditorAction::GotoLine).to_string(), "goto "),
+                    (kb.editor_first_key(EditorAction::ToggleWordWrap).to_string(), "wrap "),
+                    (kb.editor_first_key(EditorAction::Exit).to_string(), "exit"),
                 ];
 
                 for (key, rest) in &shortcuts {
                     footer_spans.push(Span::styled(key.as_str(), theme.header_style()));
+                    footer_spans.push(Span::styled(":", theme.dim_style()));
                     footer_spans.push(Span::styled(*rest, theme.dim_style()));
                 }
 

@@ -430,7 +430,7 @@ impl ViewerState {
     }
 }
 
-pub fn draw(frame: &mut Frame, state: &mut ViewerState, area: Rect, theme: &Theme) {
+pub fn draw(frame: &mut Frame, state: &mut ViewerState, area: Rect, theme: &Theme, kb: &crate::keybindings::Keybindings) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.viewer.border));
@@ -820,20 +820,23 @@ pub fn draw(frame: &mut Frame, state: &mut ViewerState, area: Rect, theme: &Them
             footer_spans.push(Span::styled(wrap_indicator, Style::default().fg(theme.viewer.wrap_indicator)));
         }
 
-        // 단축키 표시: Ctrl 조합 형식 (에디터와 통일)
-        let shortcuts = [
-            ("^Q", "uit "),
-            ("^F", "ind "),
-            ("^G", "oto "),
-            ("e", "dit "),
-            ("w", "rap "),
-            ("H", "ex "),
-            ("b", "mark"),
+        // 단축키 표시: keybindings에서 동적으로
+        use crate::keybindings::ViewerAction;
+        let vkb = kb;
+        let shortcuts: Vec<(String, &str)> = vec![
+            (vkb.viewer_first_key(ViewerAction::Quit).to_string(), "quit "),
+            (vkb.viewer_first_key(ViewerAction::Find).to_string(), "find "),
+            (vkb.viewer_first_key(ViewerAction::GotoLine).to_string(), "goto "),
+            (vkb.viewer_first_key(ViewerAction::Edit).to_string(), "edit "),
+            (vkb.viewer_first_key(ViewerAction::ToggleWrap).to_string(), "wrap "),
+            (vkb.viewer_first_key(ViewerAction::ToggleHex).to_string(), "hex "),
+            (vkb.viewer_first_key(ViewerAction::ToggleBookmark).to_string(), "bmark"),
         ];
 
-        for (key, rest) in shortcuts {
-            footer_spans.push(Span::styled(key, theme.header_style()));
-            footer_spans.push(Span::styled(rest, theme.dim_style()));
+        for (key, rest) in &shortcuts {
+            footer_spans.push(Span::styled(key.as_str(), theme.header_style()));
+            footer_spans.push(Span::styled(":", theme.dim_style()));
+            footer_spans.push(Span::styled(*rest, theme.dim_style()));
         }
 
         let footer = Line::from(footer_spans);
@@ -1375,113 +1378,82 @@ pub fn handle_input(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
 
     let visible_lines = state.visible_height;
 
-    match code {
-        // ^Q: quit (Esc도 유지)
-        KeyCode::Esc => {
-            app.current_screen = Screen::FilePanel;
-        }
-        KeyCode::Char('q') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.current_screen = Screen::FilePanel;
-        }
-        KeyCode::Char('e') | KeyCode::Char('E') => {
-            // 편집기 모드로 전환
-            if let Some(ref viewer_state) = app.viewer_state {
-                if !viewer_state.is_binary {
-                    let path = viewer_state.file_path.clone();
-                    let viewer_scroll = viewer_state.scroll;
-                    let mut editor = super::file_editor::EditorState::new();
-                    if editor.load_file(&path).is_ok() {
-                        // 뷰어의 스크롤 위치를 에디터에 전달
-                        editor.scroll = viewer_scroll;
-                        editor.cursor_line = viewer_scroll;
-                        editor.cursor_col = 0;
-                        app.editor_state = Some(editor);
-                        app.previous_screen = Some(Screen::FileViewer);
-                        app.current_screen = Screen::FileEditor;
+    use crate::keybindings::ViewerAction;
+    if let Some(action) = app.keybindings.viewer_action(code, modifiers) {
+        match action {
+            ViewerAction::Quit => {
+                app.current_screen = Screen::FilePanel;
+            }
+            ViewerAction::Edit => {
+                if let Some(ref viewer_state) = app.viewer_state {
+                    if !viewer_state.is_binary {
+                        let path = viewer_state.file_path.clone();
+                        let viewer_scroll = viewer_state.scroll;
+                        let mut editor = super::file_editor::EditorState::new();
+                        if editor.load_file(&path).is_ok() {
+                            editor.scroll = viewer_scroll;
+                            editor.cursor_line = viewer_scroll;
+                            editor.cursor_col = 0;
+                            app.editor_state = Some(editor);
+                            app.previous_screen = Some(Screen::FileViewer);
+                            app.current_screen = Screen::FileEditor;
+                        }
                     }
                 }
             }
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            state.scroll = state.scroll.saturating_sub(1);
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if state.scroll + visible_lines < state.lines.len() {
-                state.scroll += 1;
+            ViewerAction::ScrollUp => {
+                state.scroll = state.scroll.saturating_sub(1);
             }
-        }
-        KeyCode::Left | KeyCode::Char('h') if !modifiers.contains(KeyModifiers::SHIFT) => {
-            // 헥스 모드 토글 (대문자 H만)
-            if code == KeyCode::Char('h') {
-                state.toggle_mode();
-            } else {
+            ViewerAction::ScrollDown => {
+                if state.scroll + visible_lines < state.lines.len() {
+                    state.scroll += 1;
+                }
+            }
+            ViewerAction::ScrollLeft => {
                 state.horizontal_scroll = state.horizontal_scroll.saturating_sub(10);
             }
-        }
-        KeyCode::Right | KeyCode::Char('l') => {
-            if code == KeyCode::Right {
+            ViewerAction::ScrollRight => {
                 state.horizontal_scroll += 10;
             }
-        }
-        KeyCode::Char('H') => {
-            // 헥스 모드 토글
-            state.toggle_mode();
-        }
-        KeyCode::PageUp => {
-            state.scroll = state.scroll.saturating_sub(visible_lines);
-        }
-        KeyCode::PageDown => {
-            let max = state.lines.len().saturating_sub(visible_lines);
-            state.scroll = (state.scroll + visible_lines).min(max);
-        }
-        KeyCode::Home => {
-            state.scroll = 0;
-        }
-        KeyCode::End | KeyCode::Char('G') => {
-            state.scroll = state.lines.len().saturating_sub(visible_lines);
-        }
-        // ^F: find/search
-        KeyCode::Char('f') | KeyCode::Char('F') if modifiers.contains(KeyModifiers::CONTROL) => {
-            state.search_mode = true;
-            state.search_input.clear();
-            state.search_cursor_pos = 0;
-        }
-        KeyCode::Char('b') => {
-            // 현재 줄 북마크 토글
-            let current_line = state.scroll;
-            state.toggle_bookmark(current_line);
-        }
-        KeyCode::Char('B') => {
-            // 다음 북마크로 이동
-            if modifiers.contains(KeyModifiers::SHIFT) {
-                state.goto_prev_bookmark();
-            } else {
+            ViewerAction::PageUp => {
+                state.scroll = state.scroll.saturating_sub(visible_lines);
+            }
+            ViewerAction::PageDown => {
+                let max = state.lines.len().saturating_sub(visible_lines);
+                state.scroll = (state.scroll + visible_lines).min(max);
+            }
+            ViewerAction::GoTop => {
+                state.scroll = 0;
+            }
+            ViewerAction::GoBottom => {
+                state.scroll = state.lines.len().saturating_sub(visible_lines);
+            }
+            ViewerAction::Find => {
+                state.search_mode = true;
+                state.search_input.clear();
+                state.search_cursor_pos = 0;
+            }
+            ViewerAction::ToggleBookmark => {
+                let current_line = state.scroll;
+                state.toggle_bookmark(current_line);
+            }
+            ViewerAction::NextBookmark => {
                 state.goto_next_bookmark();
             }
+            ViewerAction::PrevBookmark => {
+                state.goto_prev_bookmark();
+            }
+            ViewerAction::ToggleWrap => {
+                state.word_wrap = !state.word_wrap;
+            }
+            ViewerAction::ToggleHex => {
+                state.toggle_mode();
+            }
+            ViewerAction::GotoLine => {
+                state.goto_mode = true;
+                state.goto_input.clear();
+            }
         }
-        KeyCode::Char('[') => {
-            // 이전 북마크
-            state.goto_prev_bookmark();
-        }
-        KeyCode::Char(']') => {
-            // 다음 북마크
-            state.goto_next_bookmark();
-        }
-        KeyCode::Char('w') | KeyCode::Char('W') => {
-            // Word wrap 토글
-            state.word_wrap = !state.word_wrap;
-        }
-        KeyCode::Char('g') if modifiers.contains(KeyModifiers::CONTROL) => {
-            // Ctrl+G: Goto line
-            state.goto_mode = true;
-            state.goto_input.clear();
-        }
-        KeyCode::Char(':') => {
-            // Vim 스타일 goto
-            state.goto_mode = true;
-            state.goto_input.clear();
-        }
-        _ => {}
     }
 }
 

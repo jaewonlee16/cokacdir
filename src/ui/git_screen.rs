@@ -1120,6 +1120,7 @@ fn draw_footer(
     let mut spans = Vec::new();
     for (key, rest) in &shortcuts {
         spans.push(Span::styled(*key, Style::default().fg(colors.footer_key)));
+        spans.push(Span::styled(":", Style::default().fg(colors.footer_text)));
         spans.push(Span::styled(*rest, Style::default().fg(colors.footer_text)));
     }
 

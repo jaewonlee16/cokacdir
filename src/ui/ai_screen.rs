@@ -17,6 +17,7 @@ use std::thread;
 
 use std::sync::OnceLock;
 use crate::utils::format::safe_truncate;
+use crate::keybindings::{AIScreenAction, Keybindings};
 
 /// Debug logging helper (only active when COKACDIR_DEBUG=1)
 fn debug_log(msg: &str) {
@@ -812,6 +813,13 @@ impl AIScreenState {
         self.cursor_col = new_col;
     }
 
+    fn clear_history(&mut self) {
+        debug_log("Handling clear history");
+        self.history.clear();
+        self.session_id = None;
+        self.scroll_offset = 0;
+    }
+
     pub fn submit(&mut self) {
         debug_log("=== submit() called ===");
         let input_text = self.get_input_text();
@@ -823,15 +831,6 @@ impl AIScreenState {
         let user_input = input_text.trim().to_string();
         debug_log(&format!("User input: {}", user_input));
         self.set_input_text("");
-
-        // Handle /clear command
-        if user_input.to_lowercase() == "/clear" {
-            debug_log("Handling /clear command");
-            self.history.clear();
-            self.session_id = None;
-            self.scroll_offset = 0;
-            return;
-        }
 
         // Check claude availability before actual API call
         if !self.claude_available {
@@ -1631,141 +1630,113 @@ pub fn handle_paste(state: &mut AIScreenState, text: &str) {
     }
 }
 
-pub fn handle_input(state: &mut AIScreenState, code: KeyCode, modifiers: KeyModifiers) -> bool {
+pub fn handle_input(state: &mut AIScreenState, code: KeyCode, modifiers: KeyModifiers, kb: &Keybindings) -> bool {
     let ctrl = modifiers.contains(KeyModifiers::CONTROL);
     let shift = modifiers.contains(KeyModifiers::SHIFT);
-    let alt = modifiers.contains(KeyModifiers::ALT);
 
-    match code {
-        KeyCode::Esc => {
-            let input_text = state.get_input_text();
-            if state.is_processing {
-                state.cancel_processing();
-            } else if !input_text.is_empty() {
-                // Clear input on first ESC
-                state.set_input_text("");
-            } else {
-                // Exit on second ESC (when input is empty)
-                return true;
+    if let Some(action) = kb.ai_screen_action(code, modifiers) {
+        match action {
+            AIScreenAction::Escape => {
+                let input_text = state.get_input_text();
+                if state.is_processing {
+                    state.cancel_processing();
+                } else if !input_text.is_empty() {
+                    state.set_input_text("");
+                } else {
+                    return true;
+                }
             }
-        }
-        KeyCode::Enter => {
-            if shift || ctrl || alt {
-                // Shift+Enter, Ctrl+Enter, or Alt+Enter: insert newline
-                state.insert_newline();
-            } else {
-                // Regular Enter: submit
+            AIScreenAction::Submit => {
                 state.submit();
             }
-        }
-        KeyCode::Backspace => {
-            state.backspace();
-        }
-        KeyCode::Delete => {
-            state.delete_char();
-        }
-        KeyCode::Left => {
-            state.move_left();
-        }
-        KeyCode::Right => {
-            state.move_right();
-        }
-        KeyCode::Up => {
-            if ctrl {
-                // Ctrl+Up: scroll history up
-                scroll_up(state, 1);
-            } else if state.input_lines.len() > 1 {
-                // Multi-line input: move cursor up
-                state.move_up();
-            } else {
-                // Single-line input: scroll history up
+            AIScreenAction::InsertNewline => {
+                state.insert_newline();
+            }
+            AIScreenAction::Backspace => {
+                state.backspace();
+            }
+            AIScreenAction::DeleteChar => {
+                state.delete_char();
+            }
+            AIScreenAction::MoveLeft => {
+                state.move_left();
+            }
+            AIScreenAction::MoveRight => {
+                state.move_right();
+            }
+            AIScreenAction::MoveUp => {
+                if state.input_lines.len() > 1 {
+                    state.move_up();
+                } else {
+                    scroll_up(state, 1);
+                }
+            }
+            AIScreenAction::MoveDown => {
+                if state.input_lines.len() > 1 {
+                    state.move_down();
+                } else {
+                    scroll_down(state, 1);
+                }
+            }
+            AIScreenAction::ScrollHistoryUp => {
                 scroll_up(state, 1);
             }
-        }
-        KeyCode::Down => {
-            if ctrl {
-                // Ctrl+Down: scroll history down
-                scroll_down(state, 1);
-            } else if state.input_lines.len() > 1 {
-                // Multi-line input: move cursor down
-                state.move_down();
-            } else {
-                // Single-line input: scroll history down
+            AIScreenAction::ScrollHistoryDown => {
                 scroll_down(state, 1);
             }
-        }
-        KeyCode::PageUp => {
-            // Scroll history up by visible_height or 10 lines
-            let scroll_amount = if state.last_visible_height > 1 {
-                state.last_visible_height.saturating_sub(1)
-            } else {
-                10
-            };
-            scroll_up(state, scroll_amount);
-        }
-        KeyCode::PageDown => {
-            // Scroll history down by visible_height or 10 lines
-            let scroll_amount = if state.last_visible_height > 1 {
-                state.last_visible_height.saturating_sub(1)
-            } else {
-                10
-            };
-            scroll_down(state, scroll_amount);
-        }
-        KeyCode::Home => {
-            if ctrl {
-                // Ctrl+Home: scroll to top
-                state.scroll_offset = 0;
-                state.auto_scroll = false;
-            } else {
+            AIScreenAction::PageUp => {
+                let scroll_amount = if state.last_visible_height > 1 {
+                    state.last_visible_height.saturating_sub(1)
+                } else {
+                    10
+                };
+                scroll_up(state, scroll_amount);
+            }
+            AIScreenAction::PageDown => {
+                let scroll_amount = if state.last_visible_height > 1 {
+                    state.last_visible_height.saturating_sub(1)
+                } else {
+                    10
+                };
+                scroll_down(state, scroll_amount);
+            }
+            AIScreenAction::MoveToLineStart => {
                 state.move_to_line_start();
             }
-        }
-        KeyCode::End => {
-            if ctrl {
-                // Ctrl+End: scroll to bottom and re-enable auto_scroll
-                state.scroll_offset = state.last_max_scroll;
-                state.auto_scroll = true;
-            } else {
+            AIScreenAction::MoveToLineEnd => {
                 state.move_to_line_end();
             }
-        }
-        KeyCode::Char('a') if ctrl => {
-            // Ctrl+A: move to line start
-            state.move_to_line_start();
-        }
-        KeyCode::Char('e') if ctrl => {
-            // Ctrl+E: move to line end
-            state.move_to_line_end();
-        }
-        KeyCode::Char('u') if ctrl => {
-            // Ctrl+U: kill line left
-            state.kill_line_left();
-        }
-        KeyCode::Char('k') if ctrl => {
-            // Ctrl+K: kill line right
-            state.kill_line_right();
-        }
-        KeyCode::Char('j') if ctrl => {
-            // Ctrl+J: insert newline (traditional Unix LF)
-            state.insert_newline();
-        }
-        KeyCode::Char('w') if ctrl => {
-            // Ctrl+W: delete word backwards
-            state.delete_word_left();
-        }
-        KeyCode::Char(c) => {
-            if !ctrl {
-                // 방어적 처리: 일부 터미널에서 Shift+문자가 소문자로 올 수 있음
-                let ch = if shift && c.is_ascii_lowercase() {
-                    c.to_ascii_uppercase()
-                } else {
-                    c
-                };
-                state.insert_char(ch);
+            AIScreenAction::ScrollToTop => {
+                state.scroll_offset = 0;
+                state.auto_scroll = false;
+            }
+            AIScreenAction::ScrollToBottom => {
+                state.scroll_offset = state.last_max_scroll;
+                state.auto_scroll = true;
+            }
+            AIScreenAction::KillLineLeft => {
+                state.kill_line_left();
+            }
+            AIScreenAction::KillLineRight => {
+                state.kill_line_right();
+            }
+            AIScreenAction::DeleteWordLeft => {
+                state.delete_word_left();
+            }
+            AIScreenAction::ClearHistory => {
+                state.clear_history();
             }
         }
-        _ => {}
+    } else if let KeyCode::Char(c) = code {
+        if !ctrl {
+            // 방어적 처리: 일부 터미널에서 Shift+문자가 소문자로 올 수 있음
+            let ch = if shift && c.is_ascii_lowercase() {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            };
+            state.insert_char(ch);
+        }
     }
     false
 }
@@ -1773,6 +1744,7 @@ pub fn handle_input(state: &mut AIScreenState, code: KeyCode, modifiers: KeyModi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keybindings::{KeybindingsConfig, Keybindings};
 
     fn create_test_state() -> AIScreenState {
         let mut state = AIScreenState::new("/test".to_string());
@@ -1783,6 +1755,10 @@ mod tests {
         state.last_total_lines = 100;
         state.last_visible_height = 20;
         state
+    }
+
+    fn default_kb() -> Keybindings {
+        Keybindings::from_config(&KeybindingsConfig::default())
     }
 
     #[test]
@@ -1872,7 +1848,7 @@ mod tests {
         state.last_visible_height = 20;
 
         // PageUp should scroll by visible_height - 1 = 19
-        handle_input(&mut state, KeyCode::PageUp, KeyModifiers::empty());
+        handle_input(&mut state, KeyCode::PageUp, KeyModifiers::empty(), &default_kb());
 
         assert_eq!(state.scroll_offset, 21);  // 40 - 19 = 21
     }
@@ -1885,7 +1861,7 @@ mod tests {
         state.last_visible_height = 20;
 
         // PageDown should scroll by visible_height - 1 = 19
-        handle_input(&mut state, KeyCode::PageDown, KeyModifiers::empty());
+        handle_input(&mut state, KeyCode::PageDown, KeyModifiers::empty(), &default_kb());
 
         assert_eq!(state.scroll_offset, 29);  // 10 + 19 = 29
     }
@@ -1896,7 +1872,7 @@ mod tests {
         state.scroll_offset = 30;
         state.auto_scroll = true;
 
-        handle_input(&mut state, KeyCode::Home, KeyModifiers::CONTROL);
+        handle_input(&mut state, KeyCode::Home, KeyModifiers::CONTROL, &default_kb());
 
         assert_eq!(state.scroll_offset, 0);
         assert!(!state.auto_scroll);
@@ -1908,7 +1884,7 @@ mod tests {
         state.scroll_offset = 10;
         state.auto_scroll = false;
 
-        handle_input(&mut state, KeyCode::End, KeyModifiers::CONTROL);
+        handle_input(&mut state, KeyCode::End, KeyModifiers::CONTROL, &default_kb());
 
         assert_eq!(state.scroll_offset, 50);  // last_max_scroll
         assert!(state.auto_scroll);
@@ -1921,7 +1897,7 @@ mod tests {
         state.scroll_offset = 30;
         state.auto_scroll = false;
 
-        handle_input(&mut state, KeyCode::Up, KeyModifiers::empty());
+        handle_input(&mut state, KeyCode::Up, KeyModifiers::empty(), &default_kb());
 
         assert_eq!(state.scroll_offset, 29);
     }
@@ -1934,7 +1910,7 @@ mod tests {
         state.cursor_col = 2;
         state.scroll_offset = 30;
 
-        handle_input(&mut state, KeyCode::Up, KeyModifiers::empty());
+        handle_input(&mut state, KeyCode::Up, KeyModifiers::empty(), &default_kb());
 
         // Cursor should move up, scroll should stay same
         assert_eq!(state.cursor_line, 0);
@@ -1948,7 +1924,7 @@ mod tests {
         state.cursor_line = 1;
         state.scroll_offset = 30;
 
-        handle_input(&mut state, KeyCode::Up, KeyModifiers::CONTROL);
+        handle_input(&mut state, KeyCode::Up, KeyModifiers::CONTROL, &default_kb());
 
         // Cursor should NOT move, scroll should change
         assert_eq!(state.cursor_line, 1);

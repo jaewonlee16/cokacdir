@@ -152,14 +152,15 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
     let mut footer_spans = vec![];
 
     let commands: Vec<(String, &str)> = vec![
-        (kb.process_manager_first_key(ProcessManagerAction::Kill).to_string(), " kill "),
-        (kb.process_manager_first_key(ProcessManagerAction::ForceKill).to_string(), " kill! "),
-        (kb.process_manager_first_key(ProcessManagerAction::Refresh).to_string(), " refresh "),
-        (kb.process_manager_first_key(ProcessManagerAction::Quit).to_string(), " quit "),
+        (kb.process_manager_first_key(ProcessManagerAction::Kill).to_string(), "kill "),
+        (kb.process_manager_first_key(ProcessManagerAction::ForceKill).to_string(), "kill! "),
+        (kb.process_manager_first_key(ProcessManagerAction::Refresh).to_string(), "refresh "),
+        (kb.process_manager_first_key(ProcessManagerAction::Quit).to_string(), "quit "),
     ];
 
     for (key, rest) in &commands {
         footer_spans.push(Span::styled(key.as_str(), theme.header_style()));
+        footer_spans.push(Span::styled(":", theme.dim_style()));
         footer_spans.push(Span::styled(*rest, theme.dim_style()));
     }
 
@@ -167,14 +168,15 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
     footer_spans.push(Span::styled("| sort: ", theme.dim_style()));
 
     let sort_options: Vec<(String, &str)> = vec![
-        (kb.process_manager_first_key(ProcessManagerAction::SortByPid).to_string(), " pid "),
-        (kb.process_manager_first_key(ProcessManagerAction::SortByCpu).to_string(), " cpu "),
-        (kb.process_manager_first_key(ProcessManagerAction::SortByMem).to_string(), " mem "),
-        (kb.process_manager_first_key(ProcessManagerAction::SortByName).to_string(), " name"),
+        (kb.process_manager_first_key(ProcessManagerAction::SortByPid).to_string(), "pid "),
+        (kb.process_manager_first_key(ProcessManagerAction::SortByCpu).to_string(), "cpu "),
+        (kb.process_manager_first_key(ProcessManagerAction::SortByMem).to_string(), "mem "),
+        (kb.process_manager_first_key(ProcessManagerAction::SortByName).to_string(), "name"),
     ];
 
     for (key, rest) in &sort_options {
         footer_spans.push(Span::styled(key.as_str(), theme.header_style()));
+        footer_spans.push(Span::styled(":", theme.dim_style()));
         footer_spans.push(Span::styled(*rest, theme.dim_style()));
     }
 

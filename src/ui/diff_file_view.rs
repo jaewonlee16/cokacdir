@@ -618,15 +618,16 @@ pub fn draw(frame: &mut Frame, state: &mut DiffFileViewState, area: Rect, theme:
         .fg(theme.diff_file_view.footer_text)
         .bg(theme.diff_file_view.bg);
     let shortcuts: Vec<(String, &str)> = vec![
-        (kb.diff_file_view_first_key(DiffFileViewAction::MoveUp).to_string(), " scroll "),
-        (kb.diff_file_view_first_key(DiffFileViewAction::PageUp).to_string(), " page "),
-        (kb.diff_file_view_first_key(DiffFileViewAction::NextChange).to_string(), " next "),
-        (kb.diff_file_view_first_key(DiffFileViewAction::PrevChange).to_string(), " prev "),
-        (kb.diff_file_view_first_key(DiffFileViewAction::Close).to_string(), " back"),
+        (kb.diff_file_view_first_key(DiffFileViewAction::MoveUp).to_string(), "scroll "),
+        (kb.diff_file_view_first_key(DiffFileViewAction::PageUp).to_string(), "page "),
+        (kb.diff_file_view_first_key(DiffFileViewAction::NextChange).to_string(), "next "),
+        (kb.diff_file_view_first_key(DiffFileViewAction::PrevChange).to_string(), "prev "),
+        (kb.diff_file_view_first_key(DiffFileViewAction::Close).to_string(), "back"),
     ];
     let mut fn_spans = Vec::new();
     for (key, label) in &shortcuts {
-        fn_spans.push(Span::styled(format!(" {}", key), key_style));
+        fn_spans.push(Span::styled(key.as_str(), key_style));
+        fn_spans.push(Span::styled(":", text_style));
         fn_spans.push(Span::styled(*label, text_style));
     }
     let fn_line = Line::from(fn_spans);

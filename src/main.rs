@@ -621,7 +621,7 @@ fn run_app<B: ratatui::backend::Backend>(
                         }
                         Screen::AIScreen => {
                             if let Some(ref mut state) = app.ai_state {
-                                if ui::ai_screen::handle_input(state, key.code, key.modifiers) {
+                                if ui::ai_screen::handle_input(state, key.code, key.modifiers, &app.keybindings) {
                                     // Save session to file before leaving
                                     state.save_session_to_file();
                                     app.current_screen = Screen::FilePanel;
@@ -724,7 +724,7 @@ fn handle_panel_input(app: &mut App, code: KeyCode, modifiers: KeyModifiers) -> 
         }
         if ai_has_focus {
             if let Some(ref mut state) = app.ai_state {
-                if ui::ai_screen::handle_input(state, code, modifiers) {
+                if ui::ai_screen::handle_input(state, code, modifiers, &app.keybindings) {
                     // AI 화면 종료 요청
                     app.close_ai_screen();
                 }

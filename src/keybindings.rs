@@ -641,6 +641,52 @@ pub fn default_diff_screen_keybindings() -> HashMap<DiffScreenAction, Vec<String
     m
 }
 
+// ─── FileViewer context ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerAction {
+    Quit,
+    Edit,
+    ScrollUp,
+    ScrollDown,
+    ScrollLeft,
+    ScrollRight,
+    PageUp,
+    PageDown,
+    GoTop,
+    GoBottom,
+    Find,
+    ToggleBookmark,
+    NextBookmark,
+    PrevBookmark,
+    ToggleWrap,
+    ToggleHex,
+    GotoLine,
+}
+
+pub fn default_viewer_keybindings() -> HashMap<ViewerAction, Vec<String>> {
+    let mut m = HashMap::new();
+    m.insert(ViewerAction::Quit, vec!["//Close viewer".into(), "esc".into(), "ctrl+q".into()]);
+    m.insert(ViewerAction::Edit, vec!["//Open in editor".into(), "e".into()]);
+    m.insert(ViewerAction::ScrollUp, vec!["//Scroll up".into(), "up".into(), "k".into()]);
+    m.insert(ViewerAction::ScrollDown, vec!["//Scroll down".into(), "down".into(), "j".into()]);
+    m.insert(ViewerAction::ScrollLeft, vec!["//Scroll left".into(), "left".into()]);
+    m.insert(ViewerAction::ScrollRight, vec!["//Scroll right".into(), "right".into()]);
+    m.insert(ViewerAction::PageUp, vec!["//Page up".into(), "pageup".into()]);
+    m.insert(ViewerAction::PageDown, vec!["//Page down".into(), "pagedown".into()]);
+    m.insert(ViewerAction::GoTop, vec!["//Go to top".into(), "home".into()]);
+    m.insert(ViewerAction::GoBottom, vec!["//Go to bottom".into(), "end".into(), "shift+g".into()]);
+    m.insert(ViewerAction::Find, vec!["//Find text".into(), "ctrl+f".into()]);
+    m.insert(ViewerAction::ToggleBookmark, vec!["//Toggle bookmark".into(), "b".into()]);
+    m.insert(ViewerAction::NextBookmark, vec!["//Next bookmark".into(), "shift+b".into(), "]".into()]);
+    m.insert(ViewerAction::PrevBookmark, vec!["//Previous bookmark".into(), "[".into()]);
+    m.insert(ViewerAction::ToggleWrap, vec!["//Toggle word wrap".into(), "w".into()]);
+    m.insert(ViewerAction::ToggleHex, vec!["//Toggle hex mode".into(), "h".into(), "shift+h".into()]);
+    m.insert(ViewerAction::GotoLine, vec!["//Go to line".into(), "ctrl+g".into(), ":".into()]);
+    m
+}
+
 // ─── ImageViewer context ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -717,6 +763,62 @@ pub fn default_process_manager_keybindings() -> HashMap<ProcessManagerAction, Ve
     m
 }
 
+// ─── AIScreen context ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AIScreenAction {
+    Escape,
+    Submit,
+    InsertNewline,
+    Backspace,
+    DeleteChar,
+    MoveLeft,
+    MoveRight,
+    MoveUp,
+    MoveDown,
+    ScrollHistoryUp,
+    ScrollHistoryDown,
+    PageUp,
+    PageDown,
+    MoveToLineStart,
+    MoveToLineEnd,
+    ScrollToTop,
+    ScrollToBottom,
+    KillLineLeft,
+    KillLineRight,
+    DeleteWordLeft,
+    ClearHistory,
+}
+
+pub fn default_ai_screen_keybindings() -> HashMap<AIScreenAction, Vec<String>> {
+    let mut m = HashMap::new();
+
+    m.insert(AIScreenAction::Escape, vec!["//Cancel/clear/exit".into(), "esc".into()]);
+    m.insert(AIScreenAction::Submit, vec!["//Submit prompt".into(), "enter".into()]);
+    m.insert(AIScreenAction::InsertNewline, vec!["//Insert newline".into(), "shift+enter".into(), "ctrl+enter".into(), "alt+enter".into(), "ctrl+j".into()]);
+    m.insert(AIScreenAction::Backspace, vec!["//Backspace".into(), "backspace".into()]);
+    m.insert(AIScreenAction::DeleteChar, vec!["//Delete character".into(), "delete".into()]);
+    m.insert(AIScreenAction::MoveLeft, vec!["//Move cursor left".into(), "left".into()]);
+    m.insert(AIScreenAction::MoveRight, vec!["//Move cursor right".into(), "right".into()]);
+    m.insert(AIScreenAction::MoveUp, vec!["//Move up / history".into(), "up".into()]);
+    m.insert(AIScreenAction::MoveDown, vec!["//Move down / history".into(), "down".into()]);
+    m.insert(AIScreenAction::ScrollHistoryUp, vec!["//Scroll history up".into(), "ctrl+up".into()]);
+    m.insert(AIScreenAction::ScrollHistoryDown, vec!["//Scroll history down".into(), "ctrl+down".into()]);
+    m.insert(AIScreenAction::PageUp, vec!["//Page up".into(), "pageup".into()]);
+    m.insert(AIScreenAction::PageDown, vec!["//Page down".into(), "pagedown".into()]);
+    m.insert(AIScreenAction::MoveToLineStart, vec!["//Move to line start".into(), "home".into(), "ctrl+a".into()]);
+    m.insert(AIScreenAction::MoveToLineEnd, vec!["//Move to line end".into(), "end".into(), "ctrl+e".into()]);
+    m.insert(AIScreenAction::ScrollToTop, vec!["//Scroll to top".into(), "ctrl+home".into()]);
+    m.insert(AIScreenAction::ScrollToBottom, vec!["//Scroll to bottom".into(), "ctrl+end".into()]);
+    m.insert(AIScreenAction::KillLineLeft, vec!["//Kill line left".into(), "ctrl+u".into()]);
+    m.insert(AIScreenAction::KillLineRight, vec!["//Kill line right".into(), "ctrl+k".into()]);
+    m.insert(AIScreenAction::DeleteWordLeft, vec!["//Delete word left".into(), "ctrl+w".into()]);
+    m.insert(AIScreenAction::ClearHistory, vec!["//Clear conversation".into(), "ctrl+l".into()]);
+
+    m
+}
+
 // ─── JSON config & runtime container ───────────────────────────────────
 
 /// JSON-serializable keybindings configuration.
@@ -742,10 +844,14 @@ pub struct KeybindingsConfig {
     pub diff_file_view: HashMap<DiffFileViewAction, Vec<String>>,
     #[serde(default = "default_diff_screen_keybindings")]
     pub diff_screen: HashMap<DiffScreenAction, Vec<String>>,
+    #[serde(default = "default_viewer_keybindings")]
+    pub file_viewer: HashMap<ViewerAction, Vec<String>>,
     #[serde(default = "default_image_viewer_keybindings")]
     pub image_viewer: HashMap<ImageViewerAction, Vec<String>>,
     #[serde(default = "default_process_manager_keybindings")]
     pub process_manager: HashMap<ProcessManagerAction, Vec<String>>,
+    #[serde(default = "default_ai_screen_keybindings")]
+    pub ai_screen: HashMap<AIScreenAction, Vec<String>>,
 }
 
 impl Default for KeybindingsConfig {
@@ -759,8 +865,10 @@ impl Default for KeybindingsConfig {
             advanced_search: default_advanced_search_keybindings(),
             diff_file_view: default_diff_file_view_keybindings(),
             diff_screen: default_diff_screen_keybindings(),
+            file_viewer: default_viewer_keybindings(),
             image_viewer: default_image_viewer_keybindings(),
             process_manager: default_process_manager_keybindings(),
+            ai_screen: default_ai_screen_keybindings(),
         }
     }
 }
@@ -782,8 +890,10 @@ pub struct Keybindings {
     advanced_search: ActionMap<AdvancedSearchAction>,
     diff_file_view: ActionMap<DiffFileViewAction>,
     diff_screen: ActionMap<DiffScreenAction>,
+    file_viewer: ActionMap<ViewerAction>,
     image_viewer: ActionMap<ImageViewerAction>,
     process_manager: ActionMap<ProcessManagerAction>,
+    ai_screen: ActionMap<AIScreenAction>,
 }
 
 impl Keybindings {
@@ -797,8 +907,10 @@ impl Keybindings {
             advanced_search: ActionMap::build(&default_advanced_search_keybindings(), &config.advanced_search),
             diff_file_view: ActionMap::build(&default_diff_file_view_keybindings(), &config.diff_file_view),
             diff_screen: ActionMap::build(&default_diff_screen_keybindings(), &config.diff_screen),
+            file_viewer: ActionMap::build(&default_viewer_keybindings(), &config.file_viewer),
             image_viewer: ActionMap::build(&default_image_viewer_keybindings(), &config.image_viewer),
             process_manager: ActionMap::build(&default_process_manager_keybindings(), &config.process_manager),
+            ai_screen: ActionMap::build(&default_ai_screen_keybindings(), &config.ai_screen),
         }
     }
 
@@ -860,6 +972,13 @@ impl Keybindings {
     pub fn diff_screen_first_key(&self, action: DiffScreenAction) -> &str { self.diff_screen.first_key(action) }
     pub fn diff_screen_keys_joined(&self, action: DiffScreenAction, sep: &str) -> String { self.diff_screen.keys_joined(action, sep) }
 
+    // ── FileViewer ──
+    pub fn viewer_action(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<ViewerAction> {
+        self.file_viewer.lookup(code, modifiers)
+    }
+    pub fn viewer_first_key(&self, action: ViewerAction) -> &str { self.file_viewer.first_key(action) }
+    pub fn viewer_keys_joined(&self, action: ViewerAction, sep: &str) -> String { self.file_viewer.keys_joined(action, sep) }
+
     // ── ImageViewer ──
     pub fn image_viewer_action(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<ImageViewerAction> {
         self.image_viewer.lookup(code, modifiers)
@@ -873,6 +992,13 @@ impl Keybindings {
     }
     pub fn process_manager_first_key(&self, action: ProcessManagerAction) -> &str { self.process_manager.first_key(action) }
     pub fn process_manager_keys_joined(&self, action: ProcessManagerAction, sep: &str) -> String { self.process_manager.keys_joined(action, sep) }
+
+    // ── AIScreen ──
+    pub fn ai_screen_action(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<AIScreenAction> {
+        self.ai_screen.lookup(code, modifiers)
+    }
+    pub fn ai_screen_first_key(&self, action: AIScreenAction) -> &str { self.ai_screen.first_key(action) }
+    pub fn ai_screen_keys_joined(&self, action: AIScreenAction, sep: &str) -> String { self.ai_screen.keys_joined(action, sep) }
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────

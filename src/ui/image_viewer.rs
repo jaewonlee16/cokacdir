@@ -421,16 +421,17 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
     let fk = Style::default().fg(theme.image_viewer.footer_key);
     let ft = Style::default().fg(theme.image_viewer.footer_text);
     let shortcuts: Vec<(String, &str)> = vec![
-        (kb.image_viewer_first_key(ImageViewerAction::PrevImage).to_string(), " prev "),
-        (kb.image_viewer_first_key(ImageViewerAction::NextImage).to_string(), " next "),
-        (kb.image_viewer_first_key(ImageViewerAction::ZoomIn).to_string(), " zoom+ "),
-        (kb.image_viewer_first_key(ImageViewerAction::ZoomOut).to_string(), " zoom- "),
-        (kb.image_viewer_first_key(ImageViewerAction::ResetView).to_string(), " reset "),
-        (kb.image_viewer_first_key(ImageViewerAction::Close).to_string(), " close"),
+        (kb.image_viewer_first_key(ImageViewerAction::PrevImage).to_string(), "prev "),
+        (kb.image_viewer_first_key(ImageViewerAction::NextImage).to_string(), "next "),
+        (kb.image_viewer_first_key(ImageViewerAction::ZoomIn).to_string(), "zoom+ "),
+        (kb.image_viewer_first_key(ImageViewerAction::ZoomOut).to_string(), "zoom- "),
+        (kb.image_viewer_first_key(ImageViewerAction::ResetView).to_string(), "reset "),
+        (kb.image_viewer_first_key(ImageViewerAction::Close).to_string(), "close"),
     ];
     let mut help_spans = Vec::new();
     for (key, label) in &shortcuts {
         help_spans.push(Span::styled(key.as_str(), fk));
+        help_spans.push(Span::styled(":", ft));
         help_spans.push(Span::styled(*label, ft));
     }
     let help = Line::from(help_spans);

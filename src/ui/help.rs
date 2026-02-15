@@ -18,8 +18,8 @@ use super::{
     theme::Theme,
 };
 use crate::keybindings::{
-    DiffFileViewAction, DiffScreenAction, EditorAction, ImageViewerAction, Keybindings,
-    PanelAction, ProcessManagerAction, SearchResultAction,
+    AIScreenAction, DiffFileViewAction, DiffScreenAction, EditorAction, ImageViewerAction,
+    Keybindings, PanelAction, ProcessManagerAction, SearchResultAction,
 };
 
 /// Draw the help screen
@@ -359,13 +359,22 @@ fn build_help_content(theme: &Theme, kb: &Keybindings) -> Vec<Line<'static>> {
     // Section 10: AI Assistant
     // ═══════════════════════════════════════════════════════════════════════
     lines.push(section("AI Assistant"));
+    let aik = |action: AIScreenAction, desc: &str| -> Line<'static> {
+        let key_display = kb.ai_screen_keys_joined(action, " / ");
+        Line::from(vec![
+            Span::styled(format!("  {:16}", key_display), key_style),
+            Span::styled(desc.to_string(), desc_style),
+        ])
+    };
     lines.push(pk(PanelAction::AIScreen, "Open AI assistant"));
-    lines.push(key_line("Enter", "Send message"));
-    lines.push(key_line("Shift+Enter", "New line in input"));
-    lines.push(key_line("Ctrl+Up/Down", "Scroll response"));
-    lines.push(key_line("PgUp/PgDn", "Page scroll response"));
-    lines.push(key_line("/clear", "Clear conversation"));
-    lines.push(key_line("Esc", "Close assistant"));
+    lines.push(aik(AIScreenAction::Submit, "Send message"));
+    lines.push(aik(AIScreenAction::InsertNewline, "New line in input"));
+    lines.push(aik(AIScreenAction::ScrollHistoryUp, "Scroll response up"));
+    lines.push(aik(AIScreenAction::ScrollHistoryDown, "Scroll response down"));
+    lines.push(aik(AIScreenAction::PageUp, "Page scroll up"));
+    lines.push(aik(AIScreenAction::PageDown, "Page scroll down"));
+    lines.push(aik(AIScreenAction::ClearHistory, "Clear conversation"));
+    lines.push(aik(AIScreenAction::Escape, "Close assistant"));
     lines.push(Line::from(""));
 
     // ═══════════════════════════════════════════════════════════════════════

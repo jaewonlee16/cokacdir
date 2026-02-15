@@ -66,7 +66,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 // AI 모드: 뷰어와 AI 화면을 나란히 표시
                 draw_viewer_with_ai(frame, app, area, &theme);
             } else if let Some(ref mut state) = app.viewer_state {
-                file_viewer::draw(frame, state, area, &theme);
+                file_viewer::draw(frame, state, area, &theme, &app.keybindings);
             }
         }
         Screen::FileEditor => {
@@ -426,12 +426,12 @@ fn draw_viewer_with_ai(frame: &mut Frame, app: &mut App, area: Rect, theme: &The
             ai_screen::draw_with_focus(frame, state, panel_chunks[0], theme, false);
         }
         if let Some(ref mut state) = app.viewer_state {
-            file_viewer::draw(frame, state, panel_chunks[1], theme);
+            file_viewer::draw(frame, state, panel_chunks[1], theme, &app.keybindings);
         }
     } else {
         // 뷰어 왼쪽, AI 오른쪽
         if let Some(ref mut state) = app.viewer_state {
-            file_viewer::draw(frame, state, panel_chunks[0], theme);
+            file_viewer::draw(frame, state, panel_chunks[0], theme, &app.keybindings);
         }
         if let Some(ref mut state) = app.ai_state {
             ai_screen::draw_with_focus(frame, state, panel_chunks[1], theme, false);
