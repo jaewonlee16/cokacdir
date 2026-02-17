@@ -197,18 +197,22 @@ pub fn draw(frame: &mut Frame, state: &mut DedupScreenState, area: Rect, theme: 
 
     let inner_height = chunks[1].height.saturating_sub(2) as usize; // borders
 
+    let skip_count = state.log_scroll.saturating_sub(inner_height.saturating_sub(1));
     let log_lines: Vec<Line> = state
         .log_lines
         .iter()
-        .skip(state.log_scroll.saturating_sub(inner_height.saturating_sub(1)))
+        .enumerate()
+        .skip(skip_count)
         .take(inner_height)
-        .map(|line| {
+        .map(|(idx, line)| {
             let color = if line.starts_with("[ERROR]") {
                 colors.log_error
             } else if line.starts_with("REMOVE") {
                 colors.log_deleted
-            } else {
+            } else if idx % 2 == 0 {
                 colors.log_text
+            } else {
+                colors.log_text_alt
             };
             Line::from(Span::styled(line.as_str(), Style::default().fg(color)))
         })

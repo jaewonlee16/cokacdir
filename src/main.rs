@@ -403,11 +403,11 @@ fn run_app<B: ratatui::backend::Backend>(
             .unwrap_or(false);
         let is_remote_spinner = app.remote_spinner.is_some();
 
-        let poll_timeout = if is_progress_active {
-            Duration::from_millis(16) // ~60fps for smooth progress bar updates
+        let poll_timeout = if is_progress_active || is_dedup_active {
+            Duration::from_millis(16) // ~60fps for smooth real-time updates
         } else if is_remote_spinner {
             Duration::from_millis(100) // Fast polling for spinner animation
-        } else if app.current_screen == Screen::AIScreen || app.is_ai_mode() || is_file_info_calculating || is_image_loading || is_diff_comparing || is_dedup_active {
+        } else if app.current_screen == Screen::AIScreen || app.is_ai_mode() || is_file_info_calculating || is_image_loading || is_diff_comparing {
             Duration::from_millis(100) // Fast polling for spinner animation
         } else {
             Duration::from_millis(250)

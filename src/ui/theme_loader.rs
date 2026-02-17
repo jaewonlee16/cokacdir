@@ -938,6 +938,8 @@ pub struct DedupScreenColorsJson {
     pub progress_text: u8,
     #[serde(default = "default_188")]
     pub log_text: u8,
+    #[serde(default = "default_144")]
+    pub log_text_alt: u8,
     #[serde(default = "default_174")]
     pub log_deleted: u8,
     #[serde(default = "default_167")]
@@ -953,8 +955,8 @@ impl Default for DedupScreenColorsJson {
         Self {
             bg: 234, border: 102, title: 110, phase_text: 108,
             stats_text: 188, progress_bar_fill: 108, progress_bar_empty: 236,
-            progress_text: 188, log_text: 188, log_deleted: 174,
-            log_error: 167, footer_key: 146, footer_text: 102,
+            progress_text: 188, log_text: 188, log_text_alt: 144,
+            log_deleted: 174, log_error: 167, footer_key: 146, footer_text: 102,
         }
     }
 }
@@ -1011,6 +1013,7 @@ fn default_174() -> u8 { 174 }
 fn default_180() -> u8 { 180 }
 fn default_188() -> u8 { 188 }
 fn default_195() -> u8 { 195 }
+fn default_144() -> u8 { 144 }
 fn default_146() -> u8 { 146 }
 fn default_214() -> u8 { 214 }
 fn default_234() -> u8 { 234 }
@@ -1530,6 +1533,7 @@ pub fn theme_from_json(json: &ThemeJson) -> Theme {
         progress_bar_empty: idx(json.dedup_screen.progress_bar_empty),
         progress_text: idx(json.dedup_screen.progress_text),
         log_text: idx(json.dedup_screen.log_text),
+        log_text_alt: idx(json.dedup_screen.log_text_alt),
         log_deleted: idx(json.dedup_screen.log_deleted),
         log_error: idx(json.dedup_screen.log_error),
         footer_key: idx(json.dedup_screen.footer_key),
