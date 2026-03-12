@@ -3690,8 +3690,7 @@ async fn handle_shell_command(
                     let output_summary = if full_output.trim().is_empty() {
                         format!("(exit code: {})", exit_code)
                     } else {
-                        let truncated = truncate_str(full_output.trim(), 2000);
-                        format!("exit code: {}\n{}", exit_code, truncated)
+                        format!("exit code: {}\n{}", exit_code, full_output.trim())
                     };
                     append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                         ts: now_ts,
@@ -3742,12 +3741,21 @@ async fn handle_shell_command(
             if chat_id.0 < 0 {
                 let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
                 append_group_chat_log(chat_id.0, &GroupChatLogEntry {
-                    ts: now_ts,
+                    ts: now_ts.clone(),
                     bot: shell_bot_username.clone(),
                     role: "user".to_string(),
                     from: Some(shell_user_display_name.clone()),
                     text: format!("!{} [Stopped]", cmd_display_owned),
                 });
+                if !full_output.trim().is_empty() {
+                    append_group_chat_log(chat_id.0, &GroupChatLogEntry {
+                        ts: now_ts,
+                        bot: shell_bot_username.clone(),
+                        role: "assistant".to_string(),
+                        from: None,
+                        text: format!("[Stopped] exit code: -1\n{}", full_output.trim()),
+                    });
+                }
             }
 
             let mut data = state_owned.lock().await;
@@ -4530,7 +4538,7 @@ async fn handle_text_message(
             "🕙 Processing",  "🕚 Processing.", "🕛 Processing..",
         ];
         let mut full_response = String::new();
-        let mut ai_text_only = String::new();
+        let mut raw_payload = String::new();
         let mut last_edit_text = String::new();
         let mut done = false;
         let mut cancelled = false;
@@ -4576,7 +4584,7 @@ async fn handle_text_message(
                                 StreamMessage::Text { content } => {
                                     msg_debug(&format!("[polling] Text: {} chars, preview={:?}",
                                         content.len(), truncate_str(&content, 80)));
-                                    ai_text_only.push_str(&content);
+                                    raw_payload.push_str(&format!("[Text] {}\n", content));
                                     full_response.push_str(&content);
                                 }
                                 StreamMessage::ToolUse { name, input } => {
@@ -4588,6 +4596,7 @@ async fn handle_text_message(
                                     println!("  [{ts}]   ⚙ {name}: {summary}");
                                     msg_debug(&format!("[polling] ToolUse: name={}, pending_cokacdir={}, silent_mode={}, response_len={}, ends_with_nl={}",
                                         name, pending_cokacdir, silent_mode, full_response.len(), full_response.ends_with('\n')));
+                                    raw_payload.push_str(&format!("[ToolUse] {}: {}\n", name, input));
                                     if !pending_cokacdir && !silent_mode {
                                         if name == "Bash" {
                                             full_response.push_str(&format!("\n\n```\n{}\n```\n", format_bash_command(&input)));
@@ -4603,6 +4612,7 @@ async fn handle_text_message(
                                     }
                                 }
                                 StreamMessage::ToolResult { content, is_error } => {
+                                    raw_payload.push_str(&format!("[ToolResult] is_error={}, content={}\n", is_error, content));
                                     if std::mem::take(&mut pending_cokacdir) {
                                         let ts = chrono::Local::now().format("%H:%M:%S");
                                         if std::mem::take(&mut suppress_tool_display) {
@@ -4638,17 +4648,19 @@ async fn handle_text_message(
                                 }
                                 StreamMessage::TaskNotification { summary, .. } => {
                                     if !summary.is_empty() {
+                                        raw_payload.push_str(&format!("[TaskNotification] {}\n", summary));
                                         full_response.push_str(&format!("\n[Task: {}]\n", summary));
                                     }
                                 }
                                 StreamMessage::Done { result, session_id: sid } => {
-                                    msg_debug(&format!("[polling] Done: result_len={}, session_id={:?}",
-                                        result.len(), sid));
+                                    msg_debug(&format!("[polling] Done: result_len={}, session_id={:?}, full_response_len={}",
+                                        result.len(), sid, full_response.len()));
                                     if !result.is_empty() && full_response.is_empty() {
+                                        msg_debug(&format!("[polling] Done: fallback full_response = result ({})", result.len()));
                                         full_response = result.clone();
                                     }
-                                    if !result.is_empty() && ai_text_only.is_empty() {
-                                        ai_text_only = result;
+                                    if !result.is_empty() && raw_payload.is_empty() {
+                                        raw_payload = result;
                                     }
                                     if let Some(s) = sid {
                                         new_session_id = Some(s);
@@ -4668,6 +4680,8 @@ async fn handle_text_message(
                                         "Error: {}\n```\nexit code: {}\n\n[stdout]\n{}\n\n[stderr]\n{}\n```",
                                         message, code_display, stdout_display, stderr_display
                                     );
+                                    raw_payload.push_str(&format!("[Error] exit_code={}, message={}, stdout={}, stderr={}\n",
+                                        code_display, message, stdout_display, stderr_display));
                                     done = true;
                                 }
                             }
@@ -4798,6 +4812,8 @@ async fn handle_text_message(
                             session.session_id, session.history.len()));
                     }
                     // Write to group chat shared log (for cross-bot context sharing)
+                    msg_debug(&format!("[polling] JSONL check: chat_id={}, raw_payload_len={}, preview={:?}",
+                        chat_id.0, raw_payload.len(), truncate_str(&raw_payload, 100)));
                     if chat_id.0 < 0 {
                         let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
                         append_group_chat_log(chat_id.0, &GroupChatLogEntry {
@@ -4807,14 +4823,17 @@ async fn handle_text_message(
                             from: Some(user_display_name_owned.clone()),
                             text: user_text_owned.clone(),
                         });
-                        if !ai_text_only.is_empty() {
+                        if !raw_payload.is_empty() {
+                            msg_debug(&format!("[polling] JSONL: writing user+assistant entries, raw_payload_len={}", raw_payload.len()));
                             append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                                 ts: now_ts,
                                 bot: bot_username_for_log.clone(),
                                 role: "assistant".to_string(),
                                 from: None,
-                                text: ai_text_only.clone(),
+                                text: std::mem::take(&mut raw_payload),
                             });
+                        } else {
+                            msg_debug(&format!("[polling] JSONL: user entry written, assistant SKIPPED (raw_payload is empty)"));
                         }
                     }
                 }
@@ -4918,7 +4937,9 @@ async fn handle_text_message(
                 });
                 save_session_to_file(session, &current_path, provider_str);
                 // Write to group chat shared log (for cross-bot context sharing)
-                if chat_id.0 < 0 && !ai_text_only.is_empty() {
+                msg_debug(&format!("[polling] JSONL stopped check: chat_id={}, raw_payload_len={}, preview={:?}",
+                    chat_id.0, raw_payload.len(), truncate_str(&raw_payload, 100)));
+                if chat_id.0 < 0 {
                     let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
                     append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                         ts: now_ts.clone(),
@@ -4927,13 +4948,18 @@ async fn handle_text_message(
                         from: Some(user_display_name_owned.clone()),
                         text: user_text_owned,
                     });
-                    append_group_chat_log(chat_id.0, &GroupChatLogEntry {
-                        ts: now_ts,
-                        bot: bot_username_for_log.clone(),
-                        role: "assistant".to_string(),
-                        from: None,
-                        text: ai_text_only,
-                    });
+                    if !raw_payload.is_empty() {
+                        msg_debug(&format!("[polling] JSONL stopped: writing user+assistant entries, raw_payload_len={}", raw_payload.len()));
+                        append_group_chat_log(chat_id.0, &GroupChatLogEntry {
+                            ts: now_ts,
+                            bot: bot_username_for_log.clone(),
+                            role: "assistant".to_string(),
+                            from: None,
+                            text: std::mem::take(&mut raw_payload),
+                        });
+                    } else {
+                        msg_debug(&format!("[polling] JSONL stopped: user entry written, assistant SKIPPED (raw_payload is empty)"));
+                    }
                 }
             }
             data.cancel_tokens.remove(&chat_id);
@@ -6188,7 +6214,7 @@ async fn execute_schedule(
             "🕙 Processing",  "🕚 Processing.", "🕛 Processing..",
         ];
         let mut full_response = String::new();
-        let mut ai_text_only = String::new();
+        let mut raw_payload = String::new();
         let mut last_edit_text = String::new();
         let mut done = false;
         let mut cancelled = false;
@@ -6227,7 +6253,9 @@ async fn execute_schedule(
                                 exec_session_id = Some(session_id);
                             }
                             StreamMessage::Text { content } => {
-                                ai_text_only.push_str(&content);
+                                sched_debug(&format!("[sched] Text: {} chars, preview={:?}",
+                                    content.len(), truncate_str(&content, 80)));
+                                raw_payload.push_str(&format!("[Text] {}\n", content));
                                 full_response.push_str(&content);
                             }
                             StreamMessage::ToolUse { name, input } => {
@@ -6239,6 +6267,7 @@ async fn execute_schedule(
                                 println!("  [{ts}]   ⚙ [Schedule] {name}: {summary}");
                                 sched_debug(&format!("[schedule_polling] ToolUse: name={}, pending_cokacdir={}, silent_mode={}, response_len={}, ends_with_nl={}",
                                     name, pending_cokacdir, silent_mode, full_response.len(), full_response.ends_with('\n')));
+                                raw_payload.push_str(&format!("[ToolUse] {}: {}\n", name, input));
                                 if !pending_cokacdir && !silent_mode {
                                     if name == "Bash" {
                                         full_response.push_str(&format!("\n\n```\n{}\n```\n", format_bash_command(&input)));
@@ -6254,6 +6283,7 @@ async fn execute_schedule(
                                 }
                             }
                             StreamMessage::ToolResult { content, is_error } => {
+                                raw_payload.push_str(&format!("[ToolResult] is_error={}, content={}\n", is_error, content));
                                 if std::mem::take(&mut pending_cokacdir) {
                                     let ts = chrono::Local::now().format("%H:%M:%S");
                                     if std::mem::take(&mut suppress_tool_display) {
@@ -6287,15 +6317,19 @@ async fn execute_schedule(
                             }
                             StreamMessage::TaskNotification { summary, .. } => {
                                 if !summary.is_empty() {
+                                    raw_payload.push_str(&format!("[TaskNotification] {}\n", summary));
                                     full_response.push_str(&format!("\n[Task: {}]\n", summary));
                                 }
                             }
                             StreamMessage::Done { result, session_id } => {
+                                sched_debug(&format!("[sched] Done: result_len={}, full_response_len={}",
+                                    result.len(), full_response.len()));
                                 if !result.is_empty() && full_response.is_empty() {
+                                    sched_debug(&format!("[sched] Done: fallback full_response = result ({})", result.len()));
                                     full_response = result.clone();
                                 }
-                                if !result.is_empty() && ai_text_only.is_empty() {
-                                    ai_text_only = result;
+                                if !result.is_empty() && raw_payload.is_empty() {
+                                    raw_payload = result;
                                 }
                                 if let Some(sid) = session_id {
                                     exec_session_id = Some(sid);
@@ -6315,6 +6349,8 @@ async fn execute_schedule(
                                     "Error: {}\n```\nexit code: {}\n\n[stdout]\n{}\n\n[stderr]\n{}\n```",
                                     message, code_display, stdout_display, stderr_display
                                 );
+                                raw_payload.push_str(&format!("[Error] exit_code={}, message={}, stdout={}, stderr={}\n",
+                                    code_display, message, stdout_display, stderr_display));
                                 had_error = true;
                                 done = true;
                             }
@@ -6498,6 +6534,8 @@ async fn execute_schedule(
         }
 
         // Write to group chat shared log (scheduled task)
+        sched_debug(&format!("[sched] JSONL check: chat_id={}, raw_payload_len={}, preview={:?}",
+            chat_id.0, raw_payload.len(), truncate_str(&raw_payload, 100)));
         if chat_id.0 < 0 && !sched_bot_username.is_empty() {
             let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
             append_group_chat_log(chat_id.0, &GroupChatLogEntry {
@@ -6507,14 +6545,17 @@ async fn execute_schedule(
                 from: Some("scheduled_task".to_string()),
                 text: entry_clone.prompt.clone(),
             });
-            if !ai_text_only.is_empty() {
+            if !raw_payload.is_empty() {
+                sched_debug(&format!("[sched] JSONL: writing user+assistant entries, raw_payload_len={}", raw_payload.len()));
                 append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                     ts: now_ts,
                     bot: sched_bot_username.clone(),
                     role: "assistant".to_string(),
                     from: None,
-                    text: ai_text_only.clone(),
+                    text: std::mem::take(&mut raw_payload),
                 });
+            } else {
+                sched_debug(&format!("[sched] JSONL: user entry written, assistant SKIPPED (raw_payload is empty)"));
             }
         }
 
@@ -6767,7 +6808,7 @@ async fn process_bot_message(
             "🕙 Processing",  "🕚 Processing.", "🕛 Processing..",
         ];
         let mut full_response = String::new();
-        let mut ai_text_only = String::new();
+        let mut raw_payload = String::new();
         let mut last_edit_text = String::new();
         let mut done = false;
         let mut cancelled = false;
@@ -6810,8 +6851,9 @@ async fn process_bot_message(
                                     new_session_id = Some(sid);
                                 }
                                 StreamMessage::Text { content } => {
-                                    msg_debug(&format!("[botmsg_poll:{}] Text: chunk_len={}, total_len={}", bmsg_id_for_log, content.len(), full_response.len() + content.len()));
-                                    ai_text_only.push_str(&content);
+                                    msg_debug(&format!("[botmsg_poll:{}] Text: chunk_len={}, total_len={}",
+                                        bmsg_id_for_log, content.len(), full_response.len() + content.len()));
+                                    raw_payload.push_str(&format!("[Text] {}\n", content));
                                     full_response.push_str(&content);
                                 }
                                 StreamMessage::ToolUse { name, input } => {
@@ -6823,6 +6865,7 @@ async fn process_bot_message(
                                     println!("  [{ts}]   ⚙ [BotMsg] {name}: {summary}");
                                     msg_debug(&format!("[botmsg_poll:{}] ToolUse: name={}, pending_cokacdir={}, silent={}, response_len={}, ends_nl={}",
                                         bmsg_id_for_log, name, pending_cokacdir, silent_mode, full_response.len(), full_response.ends_with('\n')));
+                                    raw_payload.push_str(&format!("[ToolUse] {}: {}\n", name, input));
                                     if !pending_cokacdir && !silent_mode {
                                         if name == "Bash" {
                                             full_response.push_str(&format!("\n\n```\n{}\n```\n", format_bash_command(&input)));
@@ -6837,6 +6880,7 @@ async fn process_bot_message(
                                 StreamMessage::ToolResult { content, is_error } => {
                                     msg_debug(&format!("[botmsg_poll:{}] ToolResult: is_error={}, content_len={}, pending_cokacdir={}, last_tool={}",
                                         bmsg_id_for_log, is_error, content.len(), pending_cokacdir, last_tool_name));
+                                    raw_payload.push_str(&format!("[ToolResult] is_error={}, content={}\n", is_error, content));
                                     if std::mem::take(&mut pending_cokacdir) {
                                         let ts = chrono::Local::now().format("%H:%M:%S");
                                         if std::mem::take(&mut suppress_tool_display) {
@@ -6876,6 +6920,7 @@ async fn process_bot_message(
                                 StreamMessage::TaskNotification { summary, .. } => {
                                     msg_debug(&format!("[botmsg_poll:{}] TaskNotification: summary_len={}", bmsg_id_for_log, summary.len()));
                                     if !summary.is_empty() {
+                                        raw_payload.push_str(&format!("[TaskNotification] {}\n", summary));
                                         full_response.push_str(&format!("\n[Task: {}]\n", summary));
                                     }
                                 }
@@ -6883,10 +6928,11 @@ async fn process_bot_message(
                                     msg_debug(&format!("[botmsg_poll:{}] Done: result_len={}, session_id={:?}, full_response_len={}",
                                         bmsg_id_for_log, result.len(), sid, full_response.len()));
                                     if !result.is_empty() && full_response.is_empty() {
+                                        msg_debug(&format!("[botmsg_poll:{}] Done: fallback full_response = result ({})", bmsg_id_for_log, result.len()));
                                         full_response = result.clone();
                                     }
-                                    if !result.is_empty() && ai_text_only.is_empty() {
-                                        ai_text_only = result;
+                                    if !result.is_empty() && raw_payload.is_empty() {
+                                        raw_payload = result;
                                     }
                                     if let Some(s) = sid {
                                         new_session_id = Some(s);
@@ -6906,6 +6952,8 @@ async fn process_bot_message(
                                         "Error: {}\n```\nexit code: {}\n\n[stdout]\n{}\n\n[stderr]\n{}\n```",
                                         message, code_display, stdout_display, stderr_display
                                     );
+                                    raw_payload.push_str(&format!("[Error] exit_code={}, message={}, stdout={}, stderr={}\n",
+                                        code_display, message, stdout_display, stderr_display));
                                     done = true;
                                 }
                             }
@@ -7025,6 +7073,8 @@ async fn process_bot_message(
                         msg_debug(&format!("[botmsg_poll:{}] no session found for chat_id={}, skipping session update", bmsg_id_for_log, chat_id.0));
                     }
                     // Write to group chat shared log (bot-to-bot messages)
+                    msg_debug(&format!("[botmsg_poll:{}] JSONL check: chat_id={}, raw_payload_len={}, preview={:?}",
+                        bmsg_id_for_log, chat_id.0, raw_payload.len(), truncate_str(&raw_payload, 100)));
                     if chat_id.0 < 0 {
                         let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
                         append_group_chat_log(chat_id.0, &GroupChatLogEntry {
@@ -7034,14 +7084,17 @@ async fn process_bot_message(
                             from: Some(format!("bot:{}", from_bot_for_log)),
                             text: prompt_owned.clone(),
                         });
-                        if !ai_text_only.is_empty() {
+                        if !raw_payload.is_empty() {
+                            msg_debug(&format!("[botmsg_poll:{}] JSONL: writing user+assistant entries, raw_payload_len={}", bmsg_id_for_log, raw_payload.len()));
                             append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                                 ts: now_ts,
                                 bot: bot_username_for_log.clone(),
                                 role: "assistant".to_string(),
                                 from: None,
-                                text: ai_text_only.clone(),
+                                text: std::mem::take(&mut raw_payload),
                             });
+                        } else {
+                            msg_debug(&format!("[botmsg_poll:{}] JSONL: user entry written, assistant SKIPPED (raw_payload is empty)", bmsg_id_for_log));
                         }
                     }
                 }
@@ -7122,7 +7175,9 @@ async fn process_bot_message(
                 });
                 save_session_to_file(session, &current_path_owned, provider_str);
                 // Write to group chat shared log (bot-to-bot messages, stopped)
-                if chat_id.0 < 0 && !ai_text_only.is_empty() {
+                msg_debug(&format!("[botmsg_poll:{}] JSONL stopped check: chat_id={}, raw_payload_len={}, preview={:?}",
+                    bmsg_id_for_log, chat_id.0, raw_payload.len(), truncate_str(&raw_payload, 100)));
+                if chat_id.0 < 0 {
                     let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
                     append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                         ts: now_ts.clone(),
@@ -7131,13 +7186,18 @@ async fn process_bot_message(
                         from: Some(format!("bot:{}", from_bot_for_log)),
                         text: prompt_owned,
                     });
-                    append_group_chat_log(chat_id.0, &GroupChatLogEntry {
-                        ts: now_ts,
-                        bot: bot_username_for_log.clone(),
-                        role: "assistant".to_string(),
-                        from: None,
-                        text: ai_text_only,
-                    });
+                    if !raw_payload.is_empty() {
+                        msg_debug(&format!("[botmsg_poll:{}] JSONL stopped: writing user+assistant entries, raw_payload_len={}", bmsg_id_for_log, raw_payload.len()));
+                        append_group_chat_log(chat_id.0, &GroupChatLogEntry {
+                            ts: now_ts,
+                            bot: bot_username_for_log.clone(),
+                            role: "assistant".to_string(),
+                            from: None,
+                            text: std::mem::take(&mut raw_payload),
+                        });
+                    } else {
+                        msg_debug(&format!("[botmsg_poll:{}] JSONL stopped: user entry written, assistant SKIPPED (raw_payload is empty)", bmsg_id_for_log));
+                    }
                 }
             } else {
                 msg_debug(&format!("[botmsg_poll:{}] cancel: no session found for chat_id={}", bmsg_id_for_log, chat_id.0));
