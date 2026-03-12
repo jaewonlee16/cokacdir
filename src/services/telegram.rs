@@ -2279,7 +2279,7 @@ fn build_history_preview(history: &[HistoryItem], budget: usize) -> String {
         let prefix = match item.item_type {
             HistoryType::User => "👤",
             HistoryType::Assistant => "🤖",
-            HistoryType::Error => "❌",
+            HistoryType::Error => "",
             HistoryType::System => "⚙️",
             HistoryType::ToolUse => "🔧",
             HistoryType::ToolResult => "📋",
@@ -4123,7 +4123,7 @@ async fn handle_allowed_command(
                     tools.retain(|t| t != tool_name);
                     if tools.len() < before_len {
                         changed = true;
-                        results.push(format!("❌ <code>{}</code>", html_escape(tool_name)));
+                        results.push(format!("<code>{}</code> disabled", html_escape(tool_name)));
                     } else {
                         results.push(format!("<code>{}</code> not in list", html_escape(tool_name)));
                     }
@@ -4183,7 +4183,7 @@ async fn handle_public_command(
             let mut data = state.lock().await;
             data.settings.as_public_for_group_chat.remove(&chat_key);
             save_bot_settings(token, &data.settings);
-            "❌ Public access <b>disabled</b> for this group.\nOnly the owner can use the bot.".to_string()
+            "Public access <b>disabled</b> for this group.\nOnly the owner can use the bot.".to_string()
         }
         "" => {
             let data = state.lock().await;
@@ -4629,9 +4629,9 @@ async fn handle_text_message(
                                         println!("  [{ts}]   ✗ Error: {content}");
                                         let truncated = truncate_str(&content, 500);
                                         if truncated.contains('\n') {
-                                            full_response.push_str(&format!("\n❌\n```\n{}\n```\n", truncated));
+                                            full_response.push_str(&format!("\n```\n{}\n```\n", truncated));
                                         } else {
-                                            full_response.push_str(&format!("\n❌ `{}`\n\n", truncated));
+                                            full_response.push_str(&format!("\n`{}`\n\n", truncated));
                                         }
                                     } else if !silent_mode {
                                         if last_tool_name == "Read" {
@@ -5642,7 +5642,7 @@ fn format_cokacdir_result(content: &str) -> String {
 
     if status == "error" {
         let msg = v.get("message").and_then(|s| s.as_str()).unwrap_or("unknown error");
-        return format!("❌ {}", msg);
+        return format!("Error: {}", msg);
     }
 
     // Auto-detect subcommand from result JSON fields
@@ -5733,8 +5733,18 @@ fn format_bash_command(input: &str) -> String {
 
 /// Format tool input JSON into a human-readable summary
 fn format_tool_input(name: &str, input: &str) -> String {
-    // FileChange input is a pre-formatted summary string, not JSON
+    // FileChange input is the full Codex item JSON — extract path summary for display
     if name == "FileChange" {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(input) {
+            if let Some(changes) = v.get("changes").and_then(|v| v.as_array()) {
+                let summary: Vec<String> = changes.iter().map(|c| {
+                    let path = c.get("path").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let kind = c.get("kind").and_then(|v| v.as_str()).unwrap_or("update");
+                    format!("{}: {}", kind, path)
+                }).collect();
+                return format!("\u{1F4DD} {}", summary.join(", "));
+            }
+        }
         return format!("\u{1F4DD} {}", input);
     }
 
@@ -6298,9 +6308,9 @@ async fn execute_schedule(
                                 } else if is_error {
                                     let truncated = truncate_str(&content, 500);
                                     if truncated.contains('\n') {
-                                        full_response.push_str(&format!("\n❌\n```\n{}\n```\n", truncated));
+                                        full_response.push_str(&format!("\n```\n{}\n```\n", truncated));
                                     } else {
-                                        full_response.push_str(&format!("\n❌ `{}`\n\n", truncated));
+                                        full_response.push_str(&format!("\n`{}`\n\n", truncated));
                                     }
                                 } else if !silent_mode {
                                     if last_tool_name == "Read" {
@@ -6898,9 +6908,9 @@ async fn process_bot_message(
                                         msg_debug(&format!("[botmsg_poll:{}] tool error: {}", bmsg_id_for_log, truncate_str(&content, 200)));
                                         let truncated = truncate_str(&content, 500);
                                         if truncated.contains('\n') {
-                                            full_response.push_str(&format!("\n❌\n```\n{}\n```\n", truncated));
+                                            full_response.push_str(&format!("\n```\n{}\n```\n", truncated));
                                         } else {
-                                            full_response.push_str(&format!("\n❌ `{}`\n\n", truncated));
+                                            full_response.push_str(&format!("\n`{}`\n\n", truncated));
                                         }
                                     } else if !silent_mode {
                                         if last_tool_name == "Read" {

@@ -442,27 +442,18 @@ fn parse_item_completed(json: &Value) -> Vec<StreamMessage> {
             vec![
                 StreamMessage::ToolUse {
                     name: "Bash".to_string(),
-                    input: serde_json::json!({"command": command}).to_string(),
+                    input: serde_json::json!({"command": command, "exit_code": exit_code}).to_string(),
                 },
                 StreamMessage::ToolResult { content: aggregated_output, is_error },
             ]
         }
 
-        // File change — Codex fields: changes (array of {path, kind}), status
+        // File change — Codex fields: changes (array of {path, kind, ...}), status
         "file_change" => {
-            if let Some(changes) = item.get("changes").and_then(|v| v.as_array()) {
-                let summary: Vec<String> = changes.iter().map(|c| {
-                    let path = c.get("path").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    let kind = c.get("kind").and_then(|v| v.as_str()).unwrap_or("update");
-                    format!("{}: {}", kind, path)
-                }).collect();
-                vec![StreamMessage::ToolUse {
-                    name: "FileChange".to_string(),
-                    input: summary.join(", "),
-                }]
-            } else {
-                vec![]
-            }
+            vec![StreamMessage::ToolUse {
+                name: "FileChange".to_string(),
+                input: item.to_string(),
+            }]
         }
 
         // MCP tool call — Codex fields: server, tool, arguments, result{content,structured_content}, error{message}, status
@@ -512,24 +503,17 @@ fn parse_item_completed(json: &Value) -> Vec<StreamMessage> {
         // Codex fields: tool, sender_thread_id, receiver_thread_ids, prompt, agents_states, status
         "collab_tool_call" => {
             let tool = item.get("tool").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let prompt = item.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
-            let input = if prompt.is_empty() {
-                String::new()
-            } else {
-                prompt.to_string()
-            };
             vec![StreamMessage::ToolUse {
                 name: format!("Collab:{}", tool),
-                input,
+                input: item.to_string(),
             }]
         }
 
         // Web search — Codex fields: id, query, action
         "web_search" => {
-            let query = item.get("query").and_then(|v| v.as_str()).unwrap_or("");
             vec![StreamMessage::ToolUse {
                 name: "WebSearch".to_string(),
-                input: query.to_string(),
+                input: item.to_string(),
             }]
         }
 
