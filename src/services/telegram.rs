@@ -811,6 +811,9 @@ fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &s
              • The target bot must be in the same chat and have an active session\n\
              • Output: {{\"status\":\"ok\",\"id\":\"msg_...\"}}\n\n\
              When you receive a message from another bot (indicated by [BOT MESSAGE from @...]):\n\
+             • The --message content is text only. It does NOT include the sender's tool usage details.\n\
+             • To see what tools the sender bot used (commands executed, files read/written, results),\n\
+               check the group chat log: \"{bin}\" --read_chat_log {chat_id} --bot <SENDER_USERNAME>\n\
              • Use --message to send your response back to the sender bot (they cannot see your chat messages)\n\
              • ONLY reply via --message when you have something substantive and NEW to add\n\
              • Do NOT reply via --message in these cases (just display your response in chat without --message):\n\
