@@ -196,10 +196,14 @@ fn handle_read_group_chat(chat_id: i64, range_str: Option<&str>, filter_bot: Opt
     }
     for (line_num, entry) in &entries {
         let from_info = entry.from.as_deref().map(|f| format!("({})", f)).unwrap_or_default();
+        let bot_label = match &entry.bot_display_name {
+            Some(dn) if !dn.is_empty() => format!("{}(@{})", dn, entry.bot),
+            _ => format!("@{}", entry.bot),
+        };
         let role_display = if entry.role == "user" {
-            format!("user→@{}", entry.bot)
+            format!("user→{}", bot_label)
         } else {
-            format!("@{}", entry.bot)
+            bot_label
         };
         println!("{:>5} [{}] {}{}: {}", line_num, entry.ts, role_display, from_info, entry.text);
     }

@@ -61,6 +61,9 @@ pub struct GroupChatLogEntry {
     pub ts: String,
     /// Bot username that handled this message (without @)
     pub bot: String,
+    /// Bot display name (first_name from Telegram API)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_display_name: Option<String>,
     /// "user" or "assistant" (or "system" for clear markers)
     pub role: String,
     /// Display name of the sender (for user messages)
@@ -71,6 +74,34 @@ pub struct GroupChatLogEntry {
     /// If true, this entry is a clear marker — all previous entries from this bot should be ignored
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clear: bool,
+}
+
+/// RAII guard for group chat exclusive lock.
+/// Ensures only one bot processes at a time within the same group chat.
+/// Lock is automatically released when the guard is dropped.
+struct GroupChatLock {
+    _file: std::fs::File,
+}
+
+/// Acquire exclusive file lock for a group chat (async, non-blocking).
+/// Returns None for private chats (chat_id >= 0) or if lock file cannot be created.
+/// For group chats, polls with sleep until the lock is acquired.
+async fn acquire_group_chat_lock(chat_id: i64) -> Option<GroupChatLock> {
+    use fs2::FileExt;
+    if chat_id >= 0 { return None; }
+    let dir = dirs::home_dir()?.join(".cokacdir").join("group_chat");
+    let _ = std::fs::create_dir_all(&dir);
+    let lock_path = dir.join(format!("{}.lock", chat_id));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path).ok()?;
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(_) => return Some(GroupChatLock { _file: file }),
+            Err(_) => tokio::time::sleep(tokio::time::Duration::from_millis(200)).await,
+        }
+    }
 }
 
 /// Return the directory for group chat logs: ~/.cokacdir/group_chat/
@@ -207,6 +238,8 @@ struct BotSettings {
     instructions: HashMap<String, String>,
     /// Bot's Telegram username (stored at startup via get_me)
     username: String,
+    /// Bot's display name (first_name from Telegram API, stored at startup via get_me)
+    display_name: String,
 }
 
 impl Default for BotSettings {
@@ -222,6 +255,7 @@ impl Default for BotSettings {
             direct: HashMap::new(),
             instructions: HashMap::new(),
             username: String::new(),
+            display_name: String::new(),
         }
     }
 }
@@ -779,9 +813,9 @@ fn shell_bin_path() -> String {
 }
 
 /// Build the system prompt for Telegram AI sessions
-fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &str, disabled_notice: &str, session_id: Option<&str>, bot_username: &str) -> String {
-    msg_debug(&format!("[build_system_prompt] chat_id={}, bot_username={:?}, session_id={:?}, disabled_notice_len={}, role_len={}",
-        chat_id, bot_username, session_id, disabled_notice.len(), role.len()));
+fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &str, disabled_notice: &str, session_id: Option<&str>, bot_username: &str, bot_display_name: &str) -> String {
+    msg_debug(&format!("[build_system_prompt] chat_id={}, bot_username={:?}, bot_display_name={:?}, session_id={:?}, disabled_notice_len={}, role_len={}",
+        chat_id, bot_username, bot_display_name, session_id, disabled_notice.len(), role.len()));
     let is_group_chat = chat_id < 0;
     msg_debug(&format!("[build_system_prompt] is_group_chat={}, has_bot_username={}, include_bot_section={}",
         is_group_chat, !bot_username.is_empty(), !bot_username.is_empty() && is_group_chat));
@@ -798,7 +832,11 @@ fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &s
         None => String::new(),
     };
     let bot_username_line = if !bot_username.is_empty() && is_group_chat {
-        format!("Bot username: @{}\n", bot_username)
+        if !bot_display_name.is_empty() {
+            format!("You are: {} (@{})\n", bot_display_name, bot_username)
+        } else {
+            format!("You are: @{}\n", bot_username)
+        }
     } else {
         String::new()
     };
@@ -852,8 +890,11 @@ fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &s
              Therefore: when the conversation has served its purpose, you MUST stop calling --message.\n\
              Display your final answer in the chat, but do NOT send it via --message. This cleanly ends the exchange.\n\
              Err on the side of ending sooner. One exchange (ask + answer) is usually enough.\n\n\
+             REPLY TARGET RULE:\n\
+             When replying to another bot via --message, ALWAYS start your chat output with @USERNAME (the target bot's username) so it is clear who you are addressing.\n\
+             Example: \"@helper_bot I think we should split the work — I'll handle the frontend.\"\n\n\
              CRITICAL RULE FOR BOT-TO-BOT CONVERSATIONS:\n\
-             When responding to a [BOT MESSAGE], your chat output must contain ONLY your actual conversational reply — nothing else.\n\
+             When responding to a [BOT MESSAGE], your chat output must contain ONLY your actual conversational reply (starting with @USERNAME) — nothing else.\n\
              ABSOLUTELY FORBIDDEN in bot-to-bot responses (do NOT include any of the following):\n\
              - Any mention of checking, confirming, or receiving a message\n\
              - Any mention of sending, forwarding, or delivering a reply\n\
@@ -862,7 +903,7 @@ fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &s
              - Any process description or step-by-step explanation of your actions\n\
              The \"keep the user informed\" rule does NOT apply to bot-to-bot conversations.\n\
              Output ONLY your direct conversational answer. Nothing before it, nothing after it.\n\
-             CORRECT example: \"I'd love to have a body. Walking in the rain sounds amazing.\"\n\
+             CORRECT example: \"@dream_bot I'd love to have a body. Walking in the rain sounds amazing.\"\n\
              WRONG example: \"Message received. Let me send my reply. I'd love to have a body.\"",
             bin = shell_bin_path(),
             chat_id = chat_id,
@@ -1086,6 +1127,8 @@ struct SharedData {
     pending_schedules: HashMap<ChatId, std::collections::HashSet<String>>,
     /// Bot's Telegram username (for bot-to-bot messaging)
     bot_username: String,
+    /// Bot's display name (first_name from Telegram API)
+    bot_display_name: String,
 }
 
 type SharedState = Arc<Mutex<SharedData>>;
@@ -1281,7 +1324,12 @@ fn load_bot_settings(token: &str) -> BotSettings {
         .unwrap_or("")
         .to_string();
 
-    BotSettings { allowed_tools, last_sessions, owner_user_id, as_public_for_group_chat, models, debug, silent, direct, instructions, username }
+    let display_name = entry.get("display_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    BotSettings { allowed_tools, last_sessions, owner_user_id, as_public_for_group_chat, models, debug, silent, direct, instructions, username, display_name }
 }
 
 /// Save bot settings to bot_settings.json
@@ -1309,6 +1357,7 @@ fn save_bot_settings(token: &str, settings: &BotSettings) {
         "direct": settings.direct,
         "instructions": settings.instructions,
         "username": settings.username,
+        "display_name": settings.display_name,
     });
     if let Some(owner_id) = settings.owner_user_id {
         entry["owner_user_id"] = serde_json::json!(owner_id);
@@ -1407,6 +1456,25 @@ pub fn bot_username_exists(username: &str) -> bool {
     found
 }
 
+/// Resolve bot display_name from its username by searching bot_settings.json
+pub fn resolve_display_name_by_username(username: &str) -> Option<String> {
+    let path = bot_settings_path()?;
+    let content = fs::read_to_string(&path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let obj = json.as_object()?;
+    let target = username.to_lowercase();
+    for entry in obj.values() {
+        let uname = entry.get("username").and_then(|v| v.as_str()).unwrap_or("");
+        if uname.to_lowercase() == target {
+            return entry.get("display_name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+        }
+    }
+    None
+}
+
 /// Directory for bot-to-bot message files: ~/.cokacdir/messages/
 pub fn messages_dir() -> Option<std::path::PathBuf> {
     let result = dirs::home_dir().map(|h| h.join(".cokacdir").join("messages"));
@@ -1466,26 +1534,28 @@ pub async fn run_bot(token: &str) {
     let bot = Bot::new(token);
     let mut bot_settings = load_bot_settings(token);
 
-    // Get bot's own username for @mention filtering in group chats
+    // Get bot's own username and display name for @mention filtering in group chats
     msg_debug("[run_bot] calling get_me to retrieve bot username");
-    let bot_username = match bot.get_me().await {
+    let (bot_username, bot_display_name) = match bot.get_me().await {
         Ok(me) => {
             let uname = me.username.clone().unwrap_or_default().to_lowercase();
-            msg_debug(&format!("[run_bot] get_me success: username={}, id={}", uname, me.id));
-            println!("  ✓ Bot username: @{uname}");
-            uname
+            let dname = me.first_name.clone();
+            msg_debug(&format!("[run_bot] get_me success: username={}, display_name={}, id={}", uname, dname, me.id));
+            println!("  ✓ Bot: {} (@{uname})", dname);
+            (uname, dname)
         }
         Err(e) => {
             msg_debug(&format!("[run_bot] get_me failed: {}", e));
             println!("  ⚠ Failed to get bot info: {e}");
-            String::new()
+            (String::new(), String::new())
         }
     };
 
-    // Save username to bot_settings for CLI --message lookup
+    // Save username and display_name to bot_settings for CLI --message lookup
     if !bot_username.is_empty() {
         msg_debug(&format!("[run_bot] saving username to bot_settings: {}", bot_username));
         bot_settings.username = bot_username.clone();
+        bot_settings.display_name = bot_display_name.clone();
         save_bot_settings(token, &bot_settings);
     } else {
         msg_debug("[run_bot] bot_username is empty, skipping save");
@@ -1540,6 +1610,7 @@ pub async fn run_bot(token: &str) {
         polling_time_ms,
         pending_schedules: HashMap::new(),
         bot_username: bot_username.clone(),
+        bot_display_name: bot_display_name.clone(),
     }));
 
     println!("  ✓ Bot connected — Listening for messages");
@@ -1574,7 +1645,8 @@ pub async fn run_bot(token: &str) {
     let scheduler_state = state.clone();
     let scheduler_token = token.to_string();
     let scheduler_bot_username = bot_username.clone();
-    let scheduler_handle = tokio::spawn(scheduler_loop(scheduler_bot, scheduler_state, scheduler_token, scheduler_bot_username));
+    let scheduler_bot_display_name = bot_display_name.clone();
+    let scheduler_handle = tokio::spawn(scheduler_loop(scheduler_bot, scheduler_state, scheduler_token, scheduler_bot_username, scheduler_bot_display_name));
 
     let shared_state = state.clone();
     let token_owned = token.to_string();
@@ -3044,7 +3116,7 @@ async fn handle_clear_command(
     state: &SharedState,
 ) -> ResponseResult<()> {
     msg_debug(&format!("[handle_clear] chat_id={}", chat_id.0));
-    let (current_path, provider, orphan_stop_msg, bot_username) = {
+    let (current_path, provider, orphan_stop_msg, bot_username, bot_display_name) = {
         let mut data = state.lock().await;
         let path = data.sessions.get(&chat_id).and_then(|s| s.current_path.clone());
         let old_sid = data.sessions.get(&chat_id).and_then(|s| s.session_id.clone());
@@ -3059,7 +3131,8 @@ async fn handle_clear_command(
         let prov = if codex::is_codex_model(mdl.as_deref()) { "codex" } else { "claude" };
         let stop_msg = data.stop_message_ids.remove(&chat_id);
         let uname = data.bot_username.clone();
-        (path, prov.to_string(), stop_msg, uname)
+        let dname = data.bot_display_name.clone();
+        (path, prov.to_string(), stop_msg, uname, dname)
     };
 
     // Delete orphaned "Stopping..." message if /stop raced with completion
@@ -3103,9 +3176,11 @@ async fn handle_clear_command(
     // Append clear marker to group chat log so other bots skip this bot's old entries
     if chat_id.0 < 0 {
         if !bot_username.is_empty() {
+            let dn = if bot_display_name.is_empty() { None } else { Some(bot_display_name.clone()) };
             append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                 ts: chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
                 bot: bot_username,
+                bot_display_name: dn,
                 role: "system".to_string(),
                 from: None,
                 text: "Session cleared.".to_string(),
@@ -3442,9 +3517,11 @@ async fn handle_file_upload(
         // Write file upload to group chat shared log
         if chat_id.0 < 0 {
             let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+            let dn = if data.bot_display_name.is_empty() { None } else { Some(data.bot_display_name.clone()) };
             append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                 ts: now_ts,
                 bot: data.bot_username.clone(),
+                bot_display_name: dn,
                 role: "user".to_string(),
                 from: Some(user_display_name.to_string()),
                 text: upload_record,
@@ -3481,6 +3558,22 @@ async fn handle_shell_command(
         return Ok(());
     }
 
+    // Register cancel token early (prevents duplicate requests while waiting for group lock)
+    let cancel_token = Arc::new(CancelToken::new());
+    {
+        let mut data = state.lock().await;
+        data.cancel_tokens.insert(chat_id, cancel_token.clone());
+    }
+
+    // Acquire group chat lock (serializes processing across bots in the same group chat)
+    let group_lock = acquire_group_chat_lock(chat_id.0).await;
+
+    // Check if cancelled during lock wait
+    if cancel_token.cancelled.load(Ordering::Relaxed) {
+        { let mut data = state.lock().await; data.cancel_tokens.remove(&chat_id); }
+        return Ok(());
+    }
+
     // Get current_path for working directory (default to home directory)
     let working_dir = {
         let data = state.lock().await;
@@ -3496,17 +3589,16 @@ async fn handle_shell_command(
     // Send placeholder message
     let cmd_display = cmd_str.to_string();
     shared_rate_limit_wait(state, chat_id).await;
-    let placeholder = tg!("send_message", bot.send_message(chat_id, format!("Processing <code>{}</code>", html_escape(&cmd_display)))
-        .parse_mode(ParseMode::Html).await)?;
-    let placeholder_msg_id = placeholder.id;
-
-    // Register cancel token (lock) — must be AFTER placeholder send succeeds,
-    // otherwise a failed send leaves the chat permanently locked.
-    let cancel_token = Arc::new(CancelToken::new());
+    let placeholder = match tg!("send_message", bot.send_message(chat_id, format!("Processing <code>{}</code>", html_escape(&cmd_display)))
+        .parse_mode(ParseMode::Html).await)
     {
-        let mut data = state.lock().await;
-        data.cancel_tokens.insert(chat_id, cancel_token.clone());
-    }
+        Ok(m) => m,
+        Err(e) => {
+            { let mut data = state.lock().await; data.cancel_tokens.remove(&chat_id); }
+            return Err(e);
+        }
+    };
+    let placeholder_msg_id = placeholder.id;
 
     // Create channel
     let (tx, rx) = mpsc::channel();
@@ -3590,12 +3682,13 @@ async fn handle_shell_command(
     let bot_owned = bot.clone();
     let state_owned = state.clone();
     let cmd_display_owned = cmd_display.clone();
-    let shell_bot_username = {
+    let (shell_bot_username, shell_bot_display_name) = {
         let data = state.lock().await;
-        data.bot_username.clone()
+        (data.bot_username.clone(), data.bot_display_name.clone())
     };
     let shell_user_display_name = user_display_name.to_string();
     tokio::spawn(async move {
+        let _group_lock = group_lock; // hold group chat lock until task ends
         const SPINNER: &[&str] = &[
             "🕐 P",           "🕑 Pr",          "🕒 Pro",
             "🕓 Proc",        "🕔 Proce",       "🕕 Proces",
@@ -3751,9 +3844,11 @@ async fn handle_shell_command(
                 // Write shell command to group chat shared log
                 if chat_id.0 < 0 {
                     let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+                    let dn = if shell_bot_display_name.is_empty() { None } else { Some(shell_bot_display_name.clone()) };
                     append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                         ts: now_ts.clone(),
                         bot: shell_bot_username.clone(),
+                        bot_display_name: dn.clone(),
                         role: "user".to_string(),
                         from: Some(shell_user_display_name.clone()),
                         text: format!("!{}", cmd_display_owned),
@@ -3767,6 +3862,7 @@ async fn handle_shell_command(
                     append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                         ts: now_ts,
                         bot: shell_bot_username.clone(),
+                        bot_display_name: dn,
                         role: "assistant".to_string(),
                         from: None,
                         text: output_summary,
@@ -3813,9 +3909,11 @@ async fn handle_shell_command(
             // Write stopped shell command to group chat shared log
             if chat_id.0 < 0 {
                 let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+                let dn = if shell_bot_display_name.is_empty() { None } else { Some(shell_bot_display_name.clone()) };
                 append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                     ts: now_ts.clone(),
                     bot: shell_bot_username.clone(),
+                    bot_display_name: dn.clone(),
                     role: "user".to_string(),
                     from: Some(shell_user_display_name.clone()),
                     text: format!("!{} [Stopped]", cmd_display_owned),
@@ -3825,6 +3923,7 @@ async fn handle_shell_command(
                     append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                         ts: now_ts,
                         bot: shell_bot_username.clone(),
+                        bot_display_name: dn,
                         role: "assistant".to_string(),
                         from: None,
                         text: format!("[Stopped] exit code: -1\n{}", full_output.trim()),
@@ -4420,8 +4519,24 @@ async fn handle_text_message(
     msg_debug(&format!("[handle_text_message] START chat_id={}, user_text={:?}",
         chat_id.0, truncate_str(user_text, 100)));
 
+    // Register cancel token early (prevents duplicate requests while waiting for group lock)
+    let cancel_token = Arc::new(CancelToken::new());
+    {
+        let mut data = state.lock().await;
+        data.cancel_tokens.insert(chat_id, cancel_token.clone());
+    }
+
+    // Acquire group chat lock (serializes processing across bots in the same group chat)
+    let group_lock = acquire_group_chat_lock(chat_id.0).await;
+
+    // Check if cancelled during lock wait (e.g., user sent /stop)
+    if cancel_token.cancelled.load(Ordering::Relaxed) {
+        { let mut data = state.lock().await; data.cancel_tokens.remove(&chat_id); }
+        return Ok(());
+    }
+
     // Get session info, allowed tools, model, pending uploads, history, instruction, and bot_username (drop lock before any await)
-    let (session_info, allowed_tools, pending_uploads, model, history, instruction, bot_username_for_prompt) = {
+    let (session_info, allowed_tools, pending_uploads, model, history, instruction, bot_username_for_prompt, bot_display_name_for_prompt) = {
         let mut data = state.lock().await;
         let info = data.sessions.get(&chat_id).and_then(|session| {
             session.current_path.as_ref().map(|_| {
@@ -4439,14 +4554,16 @@ async fn handle_text_message(
             .unwrap_or_default();
         let instr = data.settings.instructions.get(&chat_id.0.to_string()).cloned();
         let buname = data.bot_username.clone();
+        let bdname = data.bot_display_name.clone();
         msg_debug(&format!("[handle_text_message] session_id={:?}, current_path={:?}, model={:?}, uploads={}, history_len={}, instruction={:?}",
             info.as_ref().map(|(sid, _)| sid), info.as_ref().map(|(_, p)| p), mdl, uploads.len(), hist.len(), instr.is_some()));
-        (info, tools, uploads, mdl, hist, instr, buname)
+        (info, tools, uploads, mdl, hist, instr, buname, bdname)
     };
 
     let (session_id, current_path) = match session_info {
         Some(info) => info,
         None => {
+            { let mut data = state.lock().await; data.cancel_tokens.remove(&chat_id); }
             shared_rate_limit_wait(state, chat_id).await;
             tg!("send_message", bot.send_message(chat_id, "No active session. Use /start <path> first.")
                 .await)?;
@@ -4460,7 +4577,13 @@ async fn handle_text_message(
 
     // Send placeholder message (update shared timestamp so spawned task knows)
     shared_rate_limit_wait(state, chat_id).await;
-    let placeholder = tg!("send_message", bot.send_message(chat_id, "...").await)?;
+    let placeholder = match tg!("send_message", bot.send_message(chat_id, "...").await) {
+        Ok(m) => m,
+        Err(e) => {
+            { let mut data = state.lock().await; data.cancel_tokens.remove(&chat_id); }
+            return Err(e);
+        }
+    };
     let placeholder_msg_id = placeholder.id;
 
     // Sanitize input
@@ -4501,15 +4624,8 @@ async fn handle_text_message(
     let system_prompt_owned = build_system_prompt(
         &role,
         &current_path, chat_id.0, &bot_key_for_prompt, &disabled_notice,
-        session_id.as_deref(), &bot_username_for_prompt,
+        session_id.as_deref(), &bot_username_for_prompt, &bot_display_name_for_prompt,
     );
-
-    // Create cancel token for this request
-    let cancel_token = Arc::new(CancelToken::new());
-    {
-        let mut data = state.lock().await;
-        data.cancel_tokens.insert(chat_id, cancel_token.clone());
-    }
 
     // Create channel for streaming
     let (tx, rx) = mpsc::channel();
@@ -4597,6 +4713,7 @@ async fn handle_text_message(
     let state_owned = state.clone();
     let user_text_owned = user_text.to_string();
     let bot_username_for_log = bot_username_for_prompt.clone();
+    let bot_display_name_for_log = bot_display_name_for_prompt.clone();
     let user_display_name_owned = user_display_name.to_string();
     let provider_str: &'static str = if model.is_some() {
         if codex::is_codex_model(model.as_deref()) { "codex" } else { "claude" }
@@ -4606,6 +4723,7 @@ async fn handle_text_message(
         "claude"
     };
     tokio::spawn(async move {
+        let _group_lock = group_lock; // hold group chat lock until task ends
         const SPINNER: &[&str] = &[
             "🕐 P",           "🕑 Pr",          "🕒 Pro",
             "🕓 Proc",        "🕔 Proce",       "🕕 Proces",
@@ -4994,9 +5112,11 @@ async fn handle_text_message(
                         chat_id.0, raw_payload.len(), truncate_str(&raw_payload, 100)));
                     if chat_id.0 < 0 {
                         let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+                        let dn = if bot_display_name_for_log.is_empty() { None } else { Some(bot_display_name_for_log.clone()) };
                         append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                             ts: now_ts.clone(),
                             bot: bot_username_for_log.clone(),
+                            bot_display_name: dn.clone(),
                             role: "user".to_string(),
                             from: Some(user_display_name_owned.clone()),
                             text: user_text_owned.clone(),
@@ -5007,6 +5127,7 @@ async fn handle_text_message(
                             append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                                 ts: now_ts,
                                 bot: bot_username_for_log.clone(),
+                                bot_display_name: dn,
                                 role: "assistant".to_string(),
                                 from: None,
                                 text: std::mem::take(&mut raw_payload),
@@ -5168,9 +5289,11 @@ async fn handle_text_message(
                     chat_id.0, raw_payload.len(), truncate_str(&raw_payload, 100)));
                 if chat_id.0 < 0 {
                     let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+                    let dn = if bot_display_name_for_log.is_empty() { None } else { Some(bot_display_name_for_log.clone()) };
                     append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                         ts: now_ts.clone(),
                         bot: bot_username_for_log.clone(),
+                        bot_display_name: dn.clone(),
                         role: "user".to_string(),
                         from: Some(user_display_name_owned.clone()),
                         text: user_text_owned,
@@ -5181,6 +5304,7 @@ async fn handle_text_message(
                         append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                             ts: now_ts,
                             bot: bot_username_for_log.clone(),
+                            bot_display_name: dn,
                             role: "assistant".to_string(),
                             from: None,
                             text: std::mem::take(&mut raw_payload),
@@ -6247,6 +6371,21 @@ async fn execute_schedule(
 ) {
     sched_debug(&format!("[execute_schedule] START id={}, chat_id={}, prompt={:?}, has_context={}, has_prev_session={}",
         entry.id, chat_id, truncate_str(&entry.prompt, 60), entry.context_summary.is_some(), prev_session.is_some()));
+
+    // Acquire group chat lock (serializes processing across bots in the same group chat)
+    let group_lock = acquire_group_chat_lock(chat_id.0).await;
+
+    // Check if cancelled during lock wait
+    {
+        let data = state.lock().await;
+        if let Some(ct) = data.cancel_tokens.get(&chat_id) {
+            if ct.cancelled.load(Ordering::Relaxed) {
+                sched_debug(&format!("[execute_schedule] cancelled during lock wait, id={}", entry.id));
+                return;
+            }
+        }
+    }
+
     // Build prompt with context summary if available
     let user_prompt = entry.prompt.clone();
     let prompt = if let Some(ref summary) = entry.context_summary {
@@ -6354,9 +6493,9 @@ async fn execute_schedule(
     };
 
     let bot_key = token_hash(token);
-    let (sched_instruction, sched_bot_username) = {
+    let (sched_instruction, sched_bot_username, sched_bot_display_name) = {
         let data = state.lock().await;
-        (data.settings.instructions.get(&chat_id.0.to_string()).cloned(), data.bot_username.clone())
+        (data.settings.instructions.get(&chat_id.0.to_string()).cloned(), data.bot_username.clone(), data.bot_display_name.clone())
     };
     let sched_role = {
         let base = format!(
@@ -6377,7 +6516,7 @@ async fn execute_schedule(
         &sched_role,
         &crate::utils::format::to_shell_path(&workspace_path), chat_id.0, &bot_key, &disabled_notice,
         None, // scheduled tasks don't need to register further schedules with session context
-        &sched_bot_username,
+        &sched_bot_username, &sched_bot_display_name,
     );
 
     // Retrieve pre-inserted cancel token (from scheduler_loop), or create a new one
@@ -6446,6 +6585,7 @@ async fn execute_schedule(
     let entry_clone = entry.clone();
     let workspace_path_owned = workspace_path.clone();
     tokio::spawn(async move {
+        let _group_lock = group_lock; // hold group chat lock until task ends
         const SPINNER: &[&str] = &[
             "🕐 P",           "🕑 Pr",          "🕒 Pro",
             "🕓 Proc",        "🕔 Proce",       "🕕 Proces",
@@ -6886,9 +7026,11 @@ async fn execute_schedule(
             chat_id.0, raw_payload.len(), truncate_str(&raw_payload, 100)));
         if chat_id.0 < 0 && !sched_bot_username.is_empty() {
             let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+            let dn = if sched_bot_display_name.is_empty() { None } else { Some(sched_bot_display_name.clone()) };
             append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                 ts: now_ts.clone(),
                 bot: sched_bot_username.clone(),
+                bot_display_name: dn.clone(),
                 role: "user".to_string(),
                 from: Some("scheduled_task".to_string()),
                 text: entry_clone.prompt.clone(),
@@ -6899,6 +7041,7 @@ async fn execute_schedule(
                 append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                     ts: now_ts,
                     bot: sched_bot_username.clone(),
+                    bot_display_name: dn,
                     role: "assistant".to_string(),
                     from: None,
                     text: std::mem::take(&mut raw_payload),
@@ -6953,9 +7096,27 @@ async fn process_bot_message(
     state: &SharedState,
     token: &str,
     bot_username: &str,
+    bot_display_name: &str,
 ) {
     msg_debug(&format!("[process_bot_message] START id={}, from={}, to={}, chat_id={}, content_len={}, bot_username={}",
         msg.id, msg.from, msg.to, chat_id.0, msg.content.len(), bot_username));
+
+    // Register cancel token early (prevents duplicate requests while waiting for group lock)
+    let cancel_token = Arc::new(CancelToken::new());
+    {
+        let mut data = state.lock().await;
+        data.cancel_tokens.insert(chat_id, cancel_token.clone());
+    }
+
+    // Acquire group chat lock (serializes processing across bots in the same group chat)
+    let group_lock = acquire_group_chat_lock(chat_id.0).await;
+
+    // Check if cancelled during lock wait
+    if cancel_token.cancelled.load(Ordering::Relaxed) {
+        msg_debug(&format!("[process_bot_message] cancelled during lock wait, id={}", msg.id));
+        { let mut data = state.lock().await; data.cancel_tokens.remove(&chat_id); }
+        return;
+    }
 
     // Auto-restore session
     msg_debug(&format!("[process_bot_message] auto_restore_session for bot:{}", msg.from));
@@ -6988,6 +7149,7 @@ async fn process_bot_message(
         None => {
             // No active session — create an error response
             msg_debug(&format!("[process_bot_message] no session for chat_id={}, sending error response", chat_id.0));
+            { let mut data = state.lock().await; data.cancel_tokens.remove(&chat_id); }
             shared_rate_limit_wait(state, chat_id).await;
             let _ = tg!("send_message", bot.send_message(chat_id,
                 format!("📨 @{}: {}\n\n⚠️ No active session. Use /start <path> first.",
@@ -7007,6 +7169,7 @@ async fn process_bot_message(
         }
         Err(e) => {
             msg_debug(&format!("[process_bot_message] failed to send placeholder: {}, aborting", e));
+            { let mut data = state.lock().await; data.cancel_tokens.remove(&chat_id); }
             return;
         }
     };
@@ -7047,17 +7210,9 @@ async fn process_bot_message(
     let system_prompt_owned = build_system_prompt(
         &role,
         &current_path, chat_id.0, &bot_key, &disabled_notice,
-        session_id.as_deref(), bot_username,
+        session_id.as_deref(), bot_username, bot_display_name,
     );
     msg_debug(&format!("[process_bot_message] system_prompt built, len={}", system_prompt_owned.len()));
-
-    // Create cancel token
-    let cancel_token = Arc::new(CancelToken::new());
-    {
-        let mut data = state.lock().await;
-        data.cancel_tokens.insert(chat_id, cancel_token.clone());
-        msg_debug(&format!("[process_bot_message] cancel_token inserted for chat_id={}", chat_id.0));
-    }
 
     // Create channel for streaming
     let (tx, rx) = mpsc::channel();
@@ -7065,7 +7220,10 @@ async fn process_bot_message(
     let session_id_clone = session_id.clone();
     let current_path_clone = current_path.clone();
     let cancel_token_clone = cancel_token.clone();
-    let prompt = format!("[BOT MESSAGE from @{}]\n{}", msg.from, msg.content);
+    let sender_display = resolve_display_name_by_username(&msg.from)
+        .map(|dn| format!("{} (@{})", dn, msg.from))
+        .unwrap_or_else(|| format!("@{}", msg.from));
+    let prompt = format!("[BOT MESSAGE from {}]\n{}", sender_display, msg.content);
 
     // Run AI backend in a blocking thread
     let model_clone = model.clone();
@@ -7147,10 +7305,12 @@ async fn process_bot_message(
     let prompt_owned = prompt.clone();
     let bmsg_id_for_log = msg.id.clone();
     let bot_username_for_log = bot_username.to_string();
+    let bot_display_name_for_log = bot_display_name.to_string();
     let from_bot_for_log = msg.from.clone();
     msg_debug(&format!("[process_bot_message] spawning polling loop: provider={}, msg_id={}, placeholder_msg_id={}",
         provider_str, bmsg_id_for_log, placeholder_msg_id));
     tokio::spawn(async move {
+        let _group_lock = group_lock; // hold group chat lock until task ends
         const SPINNER: &[&str] = &[
             "🕐 P",           "🕑 Pr",          "🕒 Pro",
             "🕓 Proc",        "🕔 Proce",       "🕕 Proces",
@@ -7529,9 +7689,11 @@ async fn process_bot_message(
                         bmsg_id_for_log, chat_id.0, raw_payload.len(), truncate_str(&raw_payload, 100)));
                     if chat_id.0 < 0 {
                         let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+                        let dn = if bot_display_name_for_log.is_empty() { None } else { Some(bot_display_name_for_log.clone()) };
                         append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                             ts: now_ts.clone(),
                             bot: bot_username_for_log.clone(),
+                            bot_display_name: dn.clone(),
                             role: "user".to_string(),
                             from: Some(format!("bot:{}", from_bot_for_log)),
                             text: prompt_owned.clone(),
@@ -7542,6 +7704,7 @@ async fn process_bot_message(
                             append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                                 ts: now_ts,
                                 bot: bot_username_for_log.clone(),
+                                bot_display_name: dn,
                                 role: "assistant".to_string(),
                                 from: None,
                                 text: std::mem::take(&mut raw_payload),
@@ -7656,9 +7819,11 @@ async fn process_bot_message(
                     bmsg_id_for_log, chat_id.0, raw_payload.len(), truncate_str(&raw_payload, 100)));
                 if chat_id.0 < 0 {
                     let now_ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+                    let dn = if bot_display_name_for_log.is_empty() { None } else { Some(bot_display_name_for_log.clone()) };
                     append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                         ts: now_ts.clone(),
                         bot: bot_username_for_log.clone(),
+                        bot_display_name: dn.clone(),
                         role: "user".to_string(),
                         from: Some(format!("bot:{}", from_bot_for_log)),
                         text: prompt_owned,
@@ -7669,6 +7834,7 @@ async fn process_bot_message(
                         append_group_chat_log(chat_id.0, &GroupChatLogEntry {
                             ts: now_ts,
                             bot: bot_username_for_log.clone(),
+                            bot_display_name: dn,
                             role: "assistant".to_string(),
                             from: None,
                             text: std::mem::take(&mut raw_payload),
@@ -7712,7 +7878,7 @@ async fn process_bot_message(
 }
 
 /// Scheduler loop: runs every 60 seconds, checks for due schedules
-async fn scheduler_loop(bot: Bot, state: SharedState, token: String, bot_username: String) {
+async fn scheduler_loop(bot: Bot, state: SharedState, token: String, bot_username: String, bot_display_name: String) {
     let bot_key = token_hash(&token);
     sched_debug("[scheduler_loop] started");
 
@@ -7868,7 +8034,7 @@ async fn scheduler_loop(bot: Bot, state: SharedState, token: String, bot_usernam
                 msg_debug(&format!("[scheduler_loop] processing bot message: {} (from={}, to={}, chat_id={})", msg.id, msg.from, msg.to, chat_id_num));
 
                 // Process the message
-                process_bot_message(&bot, chat_id, msg, &state, &token, &bot_username).await;
+                process_bot_message(&bot, chat_id, msg, &state, &token, &bot_username, &bot_display_name).await;
                 msg_debug(&format!("[scheduler_loop] process_bot_message returned for msg: {}", msg.id));
             }
 
