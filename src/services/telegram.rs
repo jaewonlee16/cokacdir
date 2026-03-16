@@ -1718,18 +1718,58 @@ pub async fn run_bot(token: &str) {
     let scheduler_bot_display_name = bot_display_name.clone();
     let scheduler_handle = tokio::spawn(scheduler_loop(scheduler_bot, scheduler_state, scheduler_token, scheduler_bot_username, scheduler_bot_display_name));
 
-    let shared_state = state.clone();
-    let token_owned = token.to_string();
-    let bot_username_owned = bot_username;
-    teloxide::repl(bot, move |bot: Bot, msg: Message| {
-        let state = shared_state.clone();
-        let token = token_owned.clone();
-        let bot_username = bot_username_owned.clone();
-        async move {
-            handle_message(bot, msg, state, &token, &bot_username).await
+    // Run polling loop with automatic reconnection on network failure.
+    // teloxide::repl may panic or exit silently when the network drops
+    // (especially on Windows). We wrap it in tokio::spawn to catch panics
+    // and retry with exponential backoff.
+    let token_for_repl = token.to_string();
+    let username_for_repl = bot_username;
+    let mut reconnect_backoff_secs = 5u64;
+
+    loop {
+        let repl_start = std::time::Instant::now();
+        let bot_clone = bot.clone();
+        let state_clone = state.clone();
+        let token_clone = token_for_repl.clone();
+        let username_clone = username_for_repl.clone();
+
+        let repl_result = tokio::spawn(async move {
+            teloxide::repl(bot_clone, move |bot: Bot, msg: Message| {
+                let state = state_clone.clone();
+                let token = token_clone.clone();
+                let bot_username = username_clone.clone();
+                async move {
+                    handle_message(bot, msg, state, &token, &bot_username).await
+                }
+            })
+            .await;
+        })
+        .await;
+
+        match repl_result {
+            Ok(()) => {
+                // Normal exit — Ctrl+C or graceful shutdown
+                msg_debug("[run_bot] repl exited normally (shutdown)");
+                break;
+            }
+            Err(e) => {
+                // Task panicked — likely network disconnection
+                let ran_for = repl_start.elapsed();
+                msg_debug(&format!("[run_bot] repl crashed after {:.1?}: {}", ran_for, e));
+                println!("  ⚠ Bot disconnected — reconnecting in {}s...", reconnect_backoff_secs);
+                tokio::time::sleep(tokio::time::Duration::from_secs(reconnect_backoff_secs)).await;
+
+                // Reset backoff if the bot was stable (>60s) before crashing
+                if ran_for.as_secs() > 60 {
+                    reconnect_backoff_secs = 5;
+                } else {
+                    reconnect_backoff_secs = (reconnect_backoff_secs * 2).min(60);
+                }
+
+                println!("  ⟳ Reconnecting...");
+            }
         }
-    })
-    .await;
+    }
 
     scheduler_handle.abort();
 }
@@ -4816,14 +4856,17 @@ async fn handle_text_message(
         msg_debug(&format!("[handle_text_message] use_codex={}, model={:?}", use_codex, model_clone));
         let result = if use_codex {
             let codex_model = model_clone.as_deref().and_then(codex::strip_codex_prefix);
-            // When resuming, Codex manages conversation history natively — no injection needed.
-            // For new sessions (no session_id), inject history into the prompt as context.
-            let (codex_prompt, codex_sp) = if session_id_clone.is_some() {
-                (context_prompt.clone(), None)
-            } else if history_clone.is_empty() {
-                let sp = format!("{}{}", system_prompt_owned, codex_extra_instructions());
-                (context_prompt.clone(), Some(sp))
-            } else {
+            // System prompt is always passed via -c model_instructions_file (handles both new & resume).
+            // For new sessions without session_id, inject conversation history into the prompt.
+            let codex_system_prompt = format!("{}{}", system_prompt_owned, codex_extra_instructions());
+            let is_resume = session_id_clone.is_some();
+            let has_history = !history_clone.is_empty();
+            msg_debug(&format!("[handle_text_message] codex: is_resume={}, has_history={}, history_len={}, sp_len={}",
+                is_resume, has_history, history_clone.len(), codex_system_prompt.len()));
+            // Inject conversation history only for new sessions (no session_id) with prior history.
+            // Resumed sessions rely on Codex's native conversation management.
+            let codex_prompt = if session_id_clone.is_none() && !history_clone.is_empty() {
+                msg_debug("[handle_text_message] codex: INJECTING history into prompt (new session with history)");
                 let mut conv = String::new();
                 conv.push_str("<conversation_history>\n");
                 for item in &history_clone {
@@ -4838,17 +4881,23 @@ async fn handle_text_message(
                 }
                 conv.push_str("</conversation_history>\n\n");
                 conv.push_str(&context_prompt);
-                let sp = format!("{}{}", system_prompt_owned, codex_extra_instructions());
-                (conv, Some(sp))
+                conv
+            } else {
+                if is_resume {
+                    msg_debug("[handle_text_message] codex: RESUME path — no history injection, sp via -c file");
+                } else {
+                    msg_debug("[handle_text_message] codex: NEW session, no history — sp via -c file");
+                }
+                context_prompt.clone()
             };
-            msg_debug(&format!("[handle_text_message] → codex::execute, codex_model={:?}, codex_prompt_len={}, resume={}",
-                codex_model, codex_prompt.len(), session_id_clone.is_some()));
+            msg_debug(&format!("[handle_text_message] → codex::execute, codex_model={:?}, codex_prompt_len={}, resume={}, system_prompt_passed=true",
+                codex_model, codex_prompt.len(), is_resume));
             codex::execute_command_streaming(
                 &codex_prompt,
                 session_id_clone.as_deref(),
                 &current_path_clone,
                 tx.clone(),
-                codex_sp.as_deref(),
+                Some(&codex_system_prompt),
                 Some(&allowed_tools),
                 Some(cancel_token_clone),
                 codex_model,
@@ -7450,12 +7499,13 @@ async fn process_bot_message(
         msg_debug(&format!("[process_bot_message:spawn_blocking] use_codex={}, model={:?}", use_codex, model_clone));
         let result = if use_codex {
             let codex_model = model_clone.as_deref().and_then(codex::strip_codex_prefix);
-            let (codex_prompt, codex_sp) = if session_id_clone.is_some() {
-                (prompt_for_ai.clone(), None)
-            } else if history_clone.is_empty() {
-                let sp = format!("{}{}", system_prompt_owned, codex_extra_instructions());
-                (prompt_for_ai.clone(), Some(sp))
-            } else {
+            let codex_system_prompt = format!("{}{}", system_prompt_owned, codex_extra_instructions());
+            let is_resume = session_id_clone.is_some();
+            let has_history = !history_clone.is_empty();
+            msg_debug(&format!("[process_bot_message] codex: is_resume={}, has_history={}, history_len={}, sp_len={}",
+                is_resume, has_history, history_clone.len(), codex_system_prompt.len()));
+            let codex_prompt = if session_id_clone.is_none() && !history_clone.is_empty() {
+                msg_debug("[process_bot_message] codex: INJECTING history into prompt (new session with history)");
                 let mut conv = String::new();
                 conv.push_str("<conversation_history>\n");
                 for item in &history_clone {
@@ -7470,15 +7520,23 @@ async fn process_bot_message(
                 }
                 conv.push_str("</conversation_history>\n\n");
                 conv.push_str(&prompt_for_ai);
-                let sp = format!("{}{}", system_prompt_owned, codex_extra_instructions());
-                (conv, Some(sp))
+                conv
+            } else {
+                if is_resume {
+                    msg_debug("[process_bot_message] codex: RESUME path — no history injection, sp via -c file");
+                } else {
+                    msg_debug("[process_bot_message] codex: NEW session, no history — sp via -c file");
+                }
+                prompt_for_ai.clone()
             };
+            msg_debug(&format!("[process_bot_message] → codex::execute, codex_model={:?}, codex_prompt_len={}, resume={}, system_prompt_passed=true",
+                codex_model, codex_prompt.len(), is_resume));
             codex::execute_command_streaming(
                 &codex_prompt,
                 session_id_clone.as_deref(),
                 &current_path_clone,
                 tx.clone(),
-                codex_sp.as_deref(),
+                Some(&codex_system_prompt),
                 Some(&allowed_tools),
                 Some(cancel_token_clone),
                 codex_model,
