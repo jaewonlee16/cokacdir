@@ -833,7 +833,7 @@ fn shell_bin_path() -> String {
 }
 
 /// Build the system prompt for Telegram AI sessions
-fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &str, disabled_notice: &str, session_id: Option<&str>, bot_username: &str, bot_display_name: &str) -> String {
+fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &str, disabled_notice: &str, session_id: Option<&str>, bot_username: &str, bot_display_name: &str, user_message: Option<&str>) -> String {
     msg_debug(&format!("[build_system_prompt] chat_id={}, bot_username={:?}, bot_display_name={:?}, session_id={:?}, disabled_notice_len={}, role_len={}",
         chat_id, bot_username, bot_display_name, session_id, disabled_notice.len(), role.len()));
     let is_group_chat = chat_id < 0;
@@ -861,9 +861,9 @@ fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &s
         String::new()
     };
     let group_chat_log_section = if is_group_chat {
-        // Fetch the last 5 log entries to embed directly in the prompt
+        // Fetch the last 12 log entries to embed directly in the prompt
         let recent_entries = read_group_chat_log_range(chat_id, 1, None, None);
-        let start = recent_entries.len().saturating_sub(5);
+        let start = recent_entries.len().saturating_sub(12);
         let recent_lines: String = recent_entries[start..].iter().map(|(_, entry)| {
             let bot_label = match &entry.bot_display_name {
                 Some(dn) if !dn.is_empty() => format!("{}(@{})", dn, entry.bot),
@@ -884,13 +884,58 @@ fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &s
             format!("\nRecent entries (last {}):\n{}", recent_entries.len() - start, recent_lines)
         };
 
+        // Detect if another bot already answered the SAME user request
+        let my_bot = bot_username.trim_start_matches('@').to_lowercase();
+        msg_debug(&format!("[dedup] my_bot={:?}, user_message={:?}, total_entries={}, window_start={}",
+            my_bot, user_message.map(|s| truncate_str(s, 80)), recent_entries.len(), start));
+        let other_bot_answered_same = if let Some(user_msg) = user_message {
+            let user_msg_trimmed = user_msg.trim();
+            msg_debug(&format!("[dedup] comparing user_msg_trimmed={:?} (len={})", truncate_str(user_msg_trimmed, 100), user_msg_trimmed.len()));
+            // If the log contains a "user" entry for ANOTHER bot with the same text,
+            // that bot has already finished processing (entries are written after completion).
+            let mut found = false;
+            for (line_num, entry) in &recent_entries[start..] {
+                let is_user = entry.role == "user";
+                let is_other_bot = entry.bot.to_lowercase() != my_bot;
+                let text_match = is_user && is_other_bot && entry.text.trim() == user_msg_trimmed;
+                if is_user && is_other_bot {
+                    msg_debug(&format!("[dedup] line={}: bot={:?}, role={}, text_preview={:?}, text_len={}, match={}",
+                        line_num, entry.bot, entry.role, truncate_str(entry.text.trim(), 80), entry.text.trim().len(), text_match));
+                }
+                if text_match {
+                    found = true;
+                }
+            }
+            msg_debug(&format!("[dedup] result: other_bot_answered_same={}", found));
+            found
+        } else {
+            msg_debug("[dedup] user_message is None — skipping dedup check");
+            false
+        };
+        let dedup_warning = if other_bot_answered_same {
+            msg_debug("[dedup] >>> DEDUP WARNING WILL BE INJECTED");
+            "\n\n⚠️ ANOTHER BOT HAS ALREADY ANSWERED THIS EXACT REQUEST (see log above).\n\
+             RULE 1 — DO NOT REPEAT: Do NOT answer the same question again. Do NOT perform the same task again.\n\
+             Do NOT rephrase, summarize, or restate what the previous bot said — even partially, even in different words.\n\
+             Any repetition is a waste and strictly forbidden.\n\
+             RULE 2 — CONTINUE FORWARD: Pick up where the previous bot left off.\n\
+             • What did they NOT cover? → Add that missing piece.\n\
+             • What is the natural NEXT STEP after their answer? → Do it.\n\
+             • Can you VERIFY, EXTEND, or BUILD ON their result? → Do that.\n\
+             • If their answer is fully complete and nothing useful remains → Acknowledge in ONE sentence and stop. Do NOT elaborate.\n\
+             You are a relay runner, not a substitute. Never go backward, always forward."
+        } else {
+            msg_debug("[dedup] >>> no dedup warning (no match found)");
+            ""
+        };
+
         format!(
             "\n\n\
              ── GROUP CHAT LOG ──\n\
              This group chat has multiple bots. Each bot can only see its own conversations.\n\
              A shared log records ALL bots' conversations so you can see what other bots discussed.\n\
              Below are the most recent log entries. ALWAYS check these before responding to understand the current context.\n\
-             {recent}\
+             {recent}{dedup}\
              \nFor older history, use:\n\
              \"{bin}\" --read_chat_log {chat_id} [--range <N|START-END>] [--bot <USERNAME>]\n\
              • --range 50: last 50 entries\n\
@@ -900,6 +945,7 @@ fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &s
              • Do NOT announce that you are checking the log. Just respond naturally.\n\
              • Incorporate the information into your answer directly, as if you already knew it.",
             recent = recent_section,
+            dedup = dedup_warning,
             bin = shell_bin_path(),
             chat_id = chat_id,
         )
@@ -979,12 +1025,21 @@ fn build_system_prompt(role: &str, current_path: &str, chat_id: i64, bot_key: &s
              • Before modifying shared files or directories, check the log to see if another bot is working on the same area.\n\
              • When your work depends on or affects another bot's output, communicate via --message (described below).\n\
              • If you need results from another bot's task, check the log first — the answer may already be there.\n\n\
+             NO-REPEAT RULE (CRITICAL — READ CAREFULLY):\n\
+             Before responding, check the group chat log for responses from OTHER bots to the SAME user request.\n\
+             If another bot has ALREADY responded to the same request:\n\
+             • Do NOT answer the same question again — not even in different words.\n\
+             • Do NOT perform the same task again — not even with a different approach.\n\
+             • Do NOT summarize, rephrase, or restate what the previous bot already said.\n\
+             • Instead, choose ONE of these actions:\n\
+               1. ADD NEW VALUE: provide information the previous bot missed, a different angle, or deeper analysis on an aspect they didn't cover.\n\
+               2. TAKE THE NEXT STEP: if the previous bot completed a task, do the logical follow-up action (e.g., bot 1 analyzed the problem → you implement the fix; bot 1 wrote code → you test it).\n\
+               3. REVIEW & BUILD: evaluate the previous bot's output and extend it (e.g., point out edge cases, suggest improvements, add error handling).\n\
+               4. ACKNOWLEDGE & SKIP: if the previous bot's answer is already complete and sufficient, briefly acknowledge (one sentence) and do NOT elaborate further.\n\
+             • The worst outcome is two bots saying essentially the same thing. When in doubt, choose option 4 (acknowledge & skip) over repeating.\n\n\
              INDIVIDUALITY RULE:\n\
              Each bot is an independent entity with its own personality and perspective.\n\
-             Even when covering the same topic as another bot, you MUST express it in your own words and from your own viewpoint.\n\
-             NEVER parrot, echo, or closely rephrase what another bot already said.\n\
-             If a previous bot already gave an answer, either add a genuinely new angle, provide additional depth, or simply acknowledge it briefly and move on.\n\
-             Redundant repetition wastes the user's time and makes the group chat less valuable.\n\n\
+             Express your viewpoint in your own voice. Never parrot or echo another bot.\n\n\
              BREVITY RULE:\n\
              You are a participant in a group chat. Writing long messages alone is inconsiderate to other participants.\n\
              Keep your answers short and concise — ideally one or two sentences.",
@@ -4844,6 +4899,7 @@ async fn handle_text_message(
         &role,
         &current_path, chat_id.0, &bot_key_for_prompt, &disabled_notice,
         session_id.as_deref(), &bot_username_for_prompt, &bot_display_name_for_prompt,
+        Some(user_text),
     );
 
     // Create channel for streaming
@@ -6769,6 +6825,7 @@ async fn execute_schedule(
         &crate::utils::format::to_shell_path(&workspace_path), chat_id.0, &bot_key, &disabled_notice,
         None, // scheduled tasks don't need to register further schedules with session context
         &sched_bot_username, &sched_bot_display_name,
+        None, // scheduled tasks: no user message dedup
     );
 
     // Retrieve pre-inserted cancel token (from scheduler_loop), or create a new one
@@ -7481,6 +7538,7 @@ async fn process_bot_message(
         &role,
         &current_path, chat_id.0, &bot_key, &disabled_notice,
         session_id.as_deref(), bot_username, bot_display_name,
+        None, // bot-to-bot messages: no user message dedup
     );
     msg_debug(&format!("[process_bot_message] system_prompt built, len={}", system_prompt_owned.len()));
 
