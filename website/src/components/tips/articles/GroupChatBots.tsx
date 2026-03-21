@@ -20,6 +20,163 @@ export default function GroupChatBots() {
         )}
       </p>
 
+      {/* BotFather Privacy Settings */}
+      <SectionHeading id="group-privacy-setup" level={3}>
+        {t('BotFather Privacy Mode', 'BotFather Privacy Mode')}
+      </SectionHeading>
+
+      <p className="text-zinc-400 leading-relaxed mb-4">
+        {t(
+          'Telegram bots have a "Privacy Mode" setting (enabled by default) that controls what messages a bot can see in group chats. When Privacy Mode is enabled, Telegram only delivers /commands and @mentions to the bot — all other messages (including ; prefixed messages) are filtered out by Telegram before they even reach the bot. When disabled, Telegram delivers all messages to the bot, but cokacdir bots still ignore regular messages that don\'t have a ; prefix, @mention, or /command — so there is no risk of bots reacting to normal group conversation.',
+          'Telegram 봇에는 "Privacy Mode" 설정이 있으며 (기본값: Enable), 그룹 채팅에서 봇이 어떤 메시지를 볼 수 있는지를 제어합니다. Enable 상태이면, Telegram이 /명령어와 @멘션만 봇에게 전달하고 나머지 메시지(; 접두사 포함)는 봇에 도달하기 전에 필터링합니다. Disable로 설정하면 Telegram이 모든 메시지를 봇에게 전달하지만, cokacdir 봇은 ; 접두사, @멘션, /명령어가 아닌 일반 메시지는 자체적으로 무시합니다 — 따라서 봇이 일반 그룹 대화에 반응할 위험은 없습니다.'
+        )}
+      </p>
+
+      <p className="text-zinc-400 leading-relaxed mb-4">
+        {t(
+          'To disable Privacy Mode, use BotFather\'s /setprivacy command:',
+          'Privacy Mode를 비활성화하려면 BotFather의 /setprivacy 명령어를 사용합니다:'
+        )}
+      </p>
+
+      <StepByStep
+        steps={[
+          {
+            title: t('Send /setprivacy to BotFather', 'BotFather에게 /setprivacy 전송'),
+            description: t(
+              'Open @BotFather in Telegram and send /setprivacy.',
+              '텔레그램에서 @BotFather를 열고 /setprivacy를 보냅니다.'
+            ),
+          },
+          {
+            title: t('Select the bot', '봇 선택'),
+            description: t(
+              'BotFather will show your bot list. Choose the bot you want to configure.',
+              'BotFather가 봇 목록을 보여줍니다. 설정할 봇을 선택합니다.'
+            ),
+          },
+          {
+            title: t('Choose "Disable"', '"Disable" 선택'),
+            description: t(
+              'Select "Disable" to turn off privacy mode. BotFather will confirm: "Privacy mode is disabled for YourBot". Repeat for each bot.',
+              '"Disable"을 선택하여 Privacy 모드를 끕니다. BotFather가 "Privacy mode is disabled for YourBot"으로 확인해줍니다. 봇이 여러 개면 각각 반복합니다.'
+            ),
+          },
+        ]}
+      />
+
+      <SectionHeading id="group-privacy-why" level={3}>
+        {t('Limitations When Privacy Mode is Enabled', 'Privacy Mode Enable 상태의 제약')}
+      </SectionHeading>
+
+      <p className="text-zinc-400 leading-relaxed mb-4">
+        {t(
+          'If you keep Privacy Mode enabled (the default), bots in group chats will have the following limitations. You can still use the bots, but some features will not work as expected.',
+          'Privacy Mode를 Enable(기본값)로 유지하면, 그룹 채팅의 봇에 아래와 같은 제약이 생깁니다. 봇을 사용할 수는 있지만 일부 기능이 기대대로 작동하지 않습니다.'
+        )}
+      </p>
+
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true }}
+        className="bg-bg-card border border-zinc-800 rounded-lg overflow-hidden mb-6"
+      >
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-zinc-800">
+              <th className="text-left text-zinc-500 font-semibold px-4 py-3"></th>
+              <th className="text-left text-zinc-500 font-semibold px-4 py-3">
+                {t('Privacy Enabled (Default)', 'Privacy Enable (기본값)')}
+              </th>
+              <th className="text-left text-zinc-500 font-semibold px-4 py-3">
+                <span className="text-accent-green">{t('Privacy Disabled (Required)', 'Privacy Disable (필수)')}</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody className="text-zinc-400">
+            {[
+              {
+                item: t('Regular messages', '일반 메시지'),
+                enabled: <span className="text-red-400">✗</span>,
+                disabled: <span className="text-accent-green">✓</span>,
+              },
+              {
+                item: t(';prefixed messages', '; 접두사 메시지'),
+                enabled: <span className="text-red-400">✗</span>,
+                disabled: <span className="text-accent-green">✓</span>,
+              },
+              {
+                item: t('@mention messages', '@멘션 메시지'),
+                enabled: <span className="text-accent-green">✓</span>,
+                disabled: <span className="text-accent-green">✓</span>,
+              },
+              {
+                item: t('/command@botname', '/명령어@봇이름'),
+                enabled: <span className="text-accent-green">✓</span>,
+                disabled: <span className="text-accent-green">✓</span>,
+              },
+              {
+                item: t('/command (bare, no @)', '/명령어 (bare, @없음)'),
+                enabled: <span className="text-yellow-400">{t('One bot only', '봇 1개만')}</span>,
+                disabled: <span className="text-accent-green">{t('All bots', '모든 봇')}</span>,
+              },
+              {
+                item: t('File uploads with caption', '캡션 있는 파일 업로드'),
+                enabled: <span className="text-red-400">{t('Only @mention captions', '@멘션 캡션만')}</span>,
+                disabled: <span className="text-accent-green">✓</span>,
+              },
+            ].map(({ item, enabled, disabled }, i) => (
+              <tr key={i} className={i < 5 ? 'border-b border-zinc-800/50' : ''}>
+                <td className="px-4 py-2.5 text-zinc-300">{item}</td>
+                <td className="px-4 py-2.5">{enabled}</td>
+                <td className="px-4 py-2.5">{disabled}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true }}
+        className="bg-bg-card border border-accent-cyan/20 rounded-lg p-5 mb-6"
+      >
+        <p className="text-zinc-500 text-xs font-semibold mb-3">
+          {t('What happens with Privacy Enabled (problematic)', 'Privacy Enable 상태에서 발생하는 문제')}
+        </p>
+        <div className="space-y-3">
+          <div className="flex items-start gap-3">
+            <span className="text-red-400 font-bold text-sm mt-0.5">1</span>
+            <p className="text-zinc-400 text-sm leading-relaxed">
+              {t(
+                <>Bare commands like <code className="text-accent-cyan font-mono bg-bg-elevated px-1 py-0.5 rounded">/start</code>, <code className="text-accent-cyan font-mono bg-bg-elevated px-1 py-0.5 rounded">/pwd</code> without @botname are delivered to <strong className="text-white">only one bot</strong> — Telegram picks one arbitrarily. The other bots never receive the command.</>,
+                <><code className="text-accent-cyan font-mono bg-bg-elevated px-1 py-0.5 rounded">/start</code>, <code className="text-accent-cyan font-mono bg-bg-elevated px-1 py-0.5 rounded">/pwd</code> 등 @봇이름 없는 명령어는 <strong className="text-white">한 봇에게만</strong> 전달됩니다 — Telegram이 임의로 하나를 선택합니다. 나머지 봇은 명령을 받지 못합니다.</>
+              )}
+            </p>
+          </div>
+          <div className="flex items-start gap-3">
+            <span className="text-red-400 font-bold text-sm mt-0.5">2</span>
+            <p className="text-zinc-400 text-sm leading-relaxed">
+              {t(
+                <>The <code className="text-accent-cyan font-mono bg-bg-elevated px-1 py-0.5 rounded">;</code> prefix for messaging all bots does not work at all — the bot simply never sees the message.</>,
+                <><code className="text-accent-cyan font-mono bg-bg-elevated px-1 py-0.5 rounded">;</code> 접두사로 모든 봇에게 메시지를 보내는 것이 작동하지 않습니다 — 봇이 메시지 자체를 볼 수 없습니다.</>
+              )}
+            </p>
+          </div>
+          <div className="flex items-start gap-3">
+            <span className="text-red-400 font-bold text-sm mt-0.5">3</span>
+            <p className="text-zinc-400 text-sm leading-relaxed">
+              {t(
+                'File uploads without @mention in the caption are silently ignored — even with a ; prefix.',
+                '캡션에 @멘션이 없는 파일 업로드는 ; 접두사가 있어도 무시됩니다.'
+              )}
+            </p>
+          </div>
+        </div>
+      </motion.div>
+
       {/* Addressing a Specific Bot */}
       <SectionHeading id="group-addressing" level={3}>
         {t('Addressing a Specific Bot', '특정 봇에게 말 걸기')}

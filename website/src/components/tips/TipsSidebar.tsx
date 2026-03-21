@@ -34,6 +34,8 @@ const tocItems: TocItem[] = [
   { id: 'instruction-group', en: 'In Group Chats', ko: '그룹 채팅에서', indent: true },
   { id: 'instruction-reference', en: 'Quick Reference', ko: '빠른 참조', indent: true },
   { id: 'group-chat', en: 'Multiple Bots in Group', ko: '그룹에서 여러 봇 다루기' },
+  { id: 'group-privacy-setup', en: 'BotFather Privacy Mode', ko: 'BotFather Privacy Mode', indent: true },
+  { id: 'group-privacy-why', en: 'Privacy Enable Limitations', ko: 'Privacy Enable 제약', indent: true },
   { id: 'group-addressing', en: 'Addressing a Bot', ko: '특정 봇에게 말 걸기', indent: true },
   { id: 'group-file-upload', en: 'File Uploads', ko: '파일 업로드', indent: true },
   { id: 'group-direct-mode', en: 'Direct Mode', ko: '다이렉트 모드', indent: true },

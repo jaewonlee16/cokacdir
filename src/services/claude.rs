@@ -82,11 +82,17 @@ fn resolve_claude_path() -> Option<String> {
     if let Ok(output) = Command::new("where").arg("claude").output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            // `where` may return multiple lines; take the first one
-            if let Some(first) = path.lines().next() {
-                if !first.is_empty() {
-                    return Some(first.to_string());
-                }
+            let lines: Vec<&str> = path.lines().filter(|l| !l.is_empty()).collect();
+            // Prefer .cmd or .exe over extensionless (which is a unix shell script)
+            if let Some(win_path) = lines.iter().find(|l| {
+                let lower = l.to_lowercase();
+                lower.ends_with(".cmd") || lower.ends_with(".exe")
+            }) {
+                return Some(win_path.to_string());
+            }
+            // Fallback: take the first result
+            if let Some(first) = lines.first() {
+                return Some(first.to_string());
             }
         }
     }
