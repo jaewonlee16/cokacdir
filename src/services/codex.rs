@@ -206,6 +206,7 @@ pub fn execute_command_streaming(
     let spawn_start = std::time::Instant::now();
     let mut child = Command::new(codex_bin)
         .args(&args)
+        .env("PATH", crate::services::claude::enhanced_path_for_bin(codex_bin))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

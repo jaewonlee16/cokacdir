@@ -215,6 +215,23 @@ fn get_claude_path() -> Option<&'static str> {
     CLAUDE_PATH.get_or_init(|| resolve_claude_path()).as_deref()
 }
 
+/// Build a PATH string with the binary's parent directory prepended.
+/// This ensures that Node.js-based CLI tools (with `#!/usr/bin/env node` shebang)
+/// can find `node` even when launched from environments where nvm/fnm isn't loaded
+/// (e.g., launchd services, cron, non-interactive SSH sessions).
+pub fn enhanced_path_for_bin(bin_path: &str) -> String {
+    let current = std::env::var("PATH").unwrap_or_default();
+    if let Some(parent) = std::path::Path::new(bin_path).parent().and_then(|p| p.to_str()) {
+        if !parent.is_empty() {
+            let sep = if cfg!(windows) { ';' } else { ':' };
+            if !current.split(sep).any(|p| p == parent) {
+                return format!("{}{}{}", parent, sep, current);
+            }
+        }
+    }
+    current
+}
+
 /// Debug logging helper (active when /debug toggled ON or COKACDIR_DEBUG=1)
 pub fn debug_log(msg: &str) {
     debug_log_to("claude.log", msg);
@@ -423,6 +440,7 @@ IMPORTANT: Format your responses using Markdown for better readability:
     let mut child = match Command::new(claude_bin)
         .args(&args)
         .current_dir(working_dir)
+        .env("PATH", enhanced_path_for_bin(claude_bin))
         .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000")
         .env("BASH_DEFAULT_TIMEOUT_MS", "86400000")  // 24 hours (no practical timeout)
         .env("BASH_MAX_TIMEOUT_MS", "86400000")      // 24 hours (no practical timeout)
@@ -566,6 +584,7 @@ pub fn extract_context_summary(session_id: &str, schedule_prompt: &str, working_
     let mut child = Command::new(&claude_bin)
         .args(&args)
         .current_dir(working_dir)
+        .env("PATH", enhanced_path_for_bin(&claude_bin))
         .env_remove("CLAUDECODE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -683,6 +702,7 @@ pub fn extract_result_summary(session_id: &str, working_dir: &str, model: Option
     let mut child = Command::new(claude_bin)
         .args(&args)
         .current_dir(working_dir)
+        .env("PATH", enhanced_path_for_bin(claude_bin))
         .env_remove("CLAUDECODE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -917,6 +937,7 @@ IMPORTANT: Format your responses using Markdown for better readability:
     let mut child = Command::new(claude_bin)
         .args(&args)
         .current_dir(working_dir)
+        .env("PATH", enhanced_path_for_bin(claude_bin))
         .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000")
         .env("BASH_DEFAULT_TIMEOUT_MS", "86400000")  // 24 hours (no practical timeout)
         .env("BASH_MAX_TIMEOUT_MS", "86400000")      // 24 hours (no practical timeout)
