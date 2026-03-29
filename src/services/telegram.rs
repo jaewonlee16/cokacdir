@@ -5909,10 +5909,28 @@ async fn handle_model_command(
             }
         }
 
-        shared_rate_limit_wait(state, chat_id).await;
-        tg!("send_message", bot.send_message(chat_id, msg)
-            .parse_mode(ParseMode::Html)
-            .await)?;
+        if msg.len() <= TELEGRAM_MSG_LIMIT {
+            shared_rate_limit_wait(state, chat_id).await;
+            tg!("send_message", bot.send_message(chat_id, msg)
+                .parse_mode(ParseMode::Html)
+                .await)?;
+        } else {
+            // Build plain text version for file attachment
+            let plain = msg
+                .replace("<b>", "").replace("</b>", "")
+                .replace("<code>", "").replace("</code>", "");
+            let tmp_path = std::env::temp_dir().join(format!("models_{}.txt", chat_id.0));
+            if let Err(e) = std::fs::write(&tmp_path, &plain) {
+                msg_debug(&format!("[handle_model_command] failed to write tmp file: {}", e));
+                return Ok(());
+            }
+            shared_rate_limit_wait(state, chat_id).await;
+            tg!("send_document", bot.send_document(
+                chat_id,
+                teloxide::types::InputFile::file(&tmp_path),
+            ).await)?;
+            let _ = std::fs::remove_file(&tmp_path);
+        }
         return Ok(());
     }
 
