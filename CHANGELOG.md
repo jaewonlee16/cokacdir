@@ -1,5 +1,11 @@
 # Changelog — cokacdir
 
+## 0.4.82 — 2026-04-03
+
+- New `/usechrome` command — toggle Chrome browser tool (`--chrome`) for Claude CLI per chat.
+
+---
+
 ## 0.4.81 — 2026-04-03
 
 - **Very long AI responses are now sent as a file attachment** instead of flooding the chat with many consecutive messages. Responses over ~8,000 characters are delivered as a downloadable `.txt` file.
