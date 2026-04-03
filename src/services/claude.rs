@@ -810,6 +810,7 @@ pub fn execute_command_streaming(
     cancel_token: Option<std::sync::Arc<CancelToken>>,
     model: Option<&str>,
     no_session_persistence: bool,
+    use_chrome: bool,
 ) -> Result<(), String> {
     debug_log("========================================");
     debug_log("=== execute_command_streaming START ===");
@@ -895,6 +896,11 @@ IMPORTANT: Format your responses using Markdown for better readability:
     if let Some(m) = model {
         args.push("--model".to_string());
         args.push(m.to_string());
+    }
+
+    // Enable Chrome browser tool
+    if use_chrome {
+        args.push("--chrome".to_string());
     }
 
     // Disable session persistence (prevents Claude from saving session to ~/.claude/sessions/)

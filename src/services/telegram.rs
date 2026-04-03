@@ -445,6 +445,8 @@ struct BotSettings {
     display_name: String,
     /// Compact startup greeting (show single line instead of full marketing message)
     greeting: bool,
+    /// chat_id (string) → true if --chrome flag should be passed to Claude CLI
+    use_chrome: HashMap<String, bool>,
 }
 
 impl Default for BotSettings {
@@ -464,6 +466,7 @@ impl Default for BotSettings {
             username: String::new(),
             display_name: String::new(),
             greeting: false,
+            use_chrome: HashMap::new(),
         }
     }
 }
@@ -1935,7 +1938,14 @@ fn load_bot_settings(token: &str) -> BotSettings {
 
     let greeting = entry.get("greeting").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    BotSettings { allowed_tools, last_sessions, owner_user_id, as_public_for_group_chat, models, debug, silent, direct, context, instructions, queue, username, display_name, greeting }
+    let use_chrome: HashMap<String, bool> = entry.get("use_chrome")
+        .and_then(|v| v.as_object())
+        .map(|obj| obj.iter()
+            .filter_map(|(k, v)| v.as_bool().map(|b| (k.clone(), b)))
+            .collect())
+        .unwrap_or_default();
+
+    BotSettings { allowed_tools, last_sessions, owner_user_id, as_public_for_group_chat, models, debug, silent, direct, context, instructions, queue, username, display_name, greeting, use_chrome }
 }
 
 /// Save bot settings to bot_settings.json
@@ -1977,6 +1987,7 @@ fn save_bot_settings(token: &str, settings: &BotSettings) {
         "username": settings.username,
         "display_name": settings.display_name,
         "greeting": settings.greeting,
+        "use_chrome": settings.use_chrome,
     });
     if let Some(owner_id) = settings.owner_user_id {
         entry["owner_user_id"] = serde_json::json!(owner_id);
@@ -2988,6 +2999,10 @@ async fn handle_message(
         msg_debug("[handle_message] routing → /debug");
         println!("  [{timestamp}] ◀ [{user_name}] /debug");
         handle_debug_command(&bot, chat_id, &state, token).await?;
+    } else if text.starts_with("/usechrome") {
+        msg_debug("[handle_message] routing → /usechrome");
+        println!("  [{timestamp}] ◀ [{user_name}] /usechrome");
+        handle_usechrome_command(&bot, chat_id, &state, token).await?;
     } else if text.starts_with("/silent") {
         msg_debug("[handle_message] routing → /silent");
         println!("  [{timestamp}] ◀ [{user_name}] /silent");
@@ -3122,6 +3137,7 @@ Ask in natural language to manage schedules.
   Minimum 2500ms, recommended 3000ms+.
 <code>/debug</code> — Toggle debug logging
 <code>/silent</code> — Toggle silent mode (hide tool calls)
+<code>/usechrome</code> — Toggle Chrome browser for Claude (--chrome)
 <code>/instruction &lt;text&gt;</code> — Set system instruction for AI
 <code>/instruction</code> — View current instruction
 <code>/instruction_clear</code> — Clear instruction
@@ -5901,6 +5917,28 @@ async fn handle_silent_command(
     Ok(())
 }
 
+/// Handle /usechrome command - toggle --chrome flag for Claude CLI per chat
+async fn handle_usechrome_command(
+    bot: &Bot,
+    chat_id: ChatId,
+    state: &SharedState,
+    token: &str,
+) -> ResponseResult<()> {
+    let next = {
+        let mut data = state.lock().await;
+        let key = chat_id.0.to_string();
+        let prev = data.settings.use_chrome.get(&key).copied().unwrap_or(false);
+        let next = !prev;
+        data.settings.use_chrome.insert(key, next);
+        save_bot_settings(token, &data.settings);
+        next
+    };
+    let status = if next { "🌐 Chrome mode: ON (--chrome)" } else { "🌐 Chrome mode: OFF" };
+    shared_rate_limit_wait(state, chat_id).await;
+    tg!("send_message", bot.send_message(chat_id, status).await)?;
+    Ok(())
+}
+
 /// Handle /queue command - toggle queue mode per chat
 /// When ON: messages sent while AI is busy are queued and processed sequentially
 /// When OFF: messages sent while AI is busy are rejected (default behavior)
@@ -6458,7 +6496,7 @@ async fn handle_text_message(
     }
 
     // Get session info, allowed tools, model, pending uploads, history, instruction, and bot_username (drop lock before any await)
-    let (session_info, allowed_tools, pending_uploads, model, history, instruction, context_count, bot_username_for_prompt, bot_display_name_for_prompt) = {
+    let (session_info, allowed_tools, pending_uploads, model, history, instruction, context_count, bot_username_for_prompt, bot_display_name_for_prompt, chrome_enabled) = {
         let mut data = state.lock().await;
         let info = data.sessions.get(&chat_id).and_then(|session| {
             session.current_path.as_ref().map(|_| {
@@ -6478,9 +6516,10 @@ async fn handle_text_message(
         let ctx_count = data.settings.context.get(&chat_id.0.to_string()).copied().unwrap_or(12);
         let buname = data.bot_username.clone();
         let bdname = data.bot_display_name.clone();
+        let chrome = data.settings.use_chrome.get(&chat_id.0.to_string()).copied().unwrap_or(false);
         msg_debug(&format!("[handle_text_message] session_id={:?}, current_path={:?}, model={:?}, uploads={}, history_len={}, instruction={:?}",
             info.as_ref().map(|(sid, _)| sid), info.as_ref().map(|(_, p)| p), mdl, uploads.len(), hist.len(), instr.is_some()));
-        (info, tools, uploads, mdl, hist, instr, ctx_count, buname, bdname)
+        (info, tools, uploads, mdl, hist, instr, ctx_count, buname, bdname, chrome)
     };
 
     let (session_id, current_path) = match session_info {
@@ -6674,6 +6713,7 @@ async fn handle_text_message(
                 Some(cancel_token_clone),
                 claude_model,
                 false,
+                chrome_enabled,
             )
         };
 
@@ -8472,9 +8512,10 @@ async fn execute_schedule(
     let workspace_path = workspace_dir.display().to_string();
 
     // Get allowed tools and model for this chat
-    let (allowed_tools, model) = {
+    let (allowed_tools, model, sched_chrome_enabled) = {
         let data = state.lock().await;
-        (get_allowed_tools(&data.settings, chat_id), get_model(&data.settings, chat_id))
+        let chrome = data.settings.use_chrome.get(&chat_id.0.to_string()).copied().unwrap_or(false);
+        (get_allowed_tools(&data.settings, chat_id), get_model(&data.settings, chat_id), chrome)
     };
 
     // Send placeholder (show only the user's original prompt, not the context summary)
@@ -8635,6 +8676,7 @@ async fn execute_schedule(
                 Some(cancel_token_clone),
                 claude_model,
                 false,
+                sched_chrome_enabled,
             )
         };
         if let Err(e) = result {
@@ -9191,7 +9233,7 @@ async fn process_bot_message(
     auto_restore_session(state, chat_id, &format!("bot:{}", msg.from)).await;
 
     // Get session info, allowed tools, model, history, instruction
-    let (session_info, allowed_tools, model, history, instruction, context_count) = {
+    let (session_info, allowed_tools, model, history, instruction, context_count, botmsg_chrome_enabled) = {
         let data = state.lock().await;
         let info = data.sessions.get(&chat_id).and_then(|session| {
             session.current_path.as_ref().map(|_| {
@@ -9205,9 +9247,10 @@ async fn process_bot_message(
             .unwrap_or_default();
         let instr = data.settings.instructions.get(&chat_id.0.to_string()).cloned();
         let ctx = data.settings.context.get(&chat_id.0.to_string()).copied().unwrap_or(12);
+        let chrome = data.settings.use_chrome.get(&chat_id.0.to_string()).copied().unwrap_or(false);
         msg_debug(&format!("[process_bot_message] session_info={}, tools={}, model={:?}, history_len={}, instruction={}",
             info.is_some(), tools.len(), mdl, hist.len(), instr.is_some()));
-        (info, tools, mdl, hist, instr, ctx)
+        (info, tools, mdl, hist, instr, ctx, chrome)
     };
 
     let (session_id, current_path) = match session_info {
@@ -9403,6 +9446,7 @@ async fn process_bot_message(
                 Some(cancel_token_clone),
                 claude_model,
                 false,
+                botmsg_chrome_enabled,
             )
         };
         if let Err(e) = result {
