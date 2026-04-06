@@ -3392,6 +3392,7 @@ async fn handle_start_command(
             history: Vec::new(),
             pending_uploads: Vec::new(),
         });
+        session.session_id = None; // Clear stale session_id from previous workspace
 
         if let Some((session_data, _)) = &existing {
             if !session_data.session_id.is_empty() {
@@ -4447,6 +4448,7 @@ async fn handle_workspace_resume(
             history: Vec::new(),
             pending_uploads: Vec::new(),
         });
+        session.session_id = None; // Clear stale session_id from previous workspace
 
         if let Some((session_data, _)) = &existing {
             if !session_data.session_id.is_empty() {
