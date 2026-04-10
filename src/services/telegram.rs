@@ -6999,10 +6999,10 @@ async fn handle_text_message(
                 if !done {
                     // ── Rolling placeholder pattern (unified for all chats) ──
                     let threshold = file_attach_threshold();
-                    if full_response.len() > last_confirmed_len && last_confirmed_len < threshold {
+                    let delta_end = floor_char_boundary(&full_response, full_response.len().min(threshold));
+                    if delta_end > last_confirmed_len {
                         // New content arrived — finalize current placeholder with delta
                         // Cap delta to threshold boundary to prevent message flood
-                        let delta_end = full_response.len().min(threshold);
                         let delta = &full_response[last_confirmed_len..delta_end];
                         let normalized_delta = normalize_empty_lines(delta);
                         let html_delta = markdown_to_telegram_html(&normalized_delta);
@@ -7094,7 +7094,7 @@ async fn handle_text_message(
                 let final_response = normalize_empty_lines(&full_response);
 
                 // ── Send only remaining delta (unified rolling placeholder) ──
-                if full_response.len() < last_confirmed_len { last_confirmed_len = 0; }
+                if full_response.len() < last_confirmed_len || !full_response.is_char_boundary(last_confirmed_len) { last_confirmed_len = 0; }
                 let remaining = &full_response[last_confirmed_len..];
                 msg_debug(&format!("[rolling_ph] FINAL: placeholder_msg_id={}, confirmed={}, total={}, remaining_len={}",
                     placeholder_msg_id, last_confirmed_len, full_response.len(), remaining.trim().len()));
@@ -7241,7 +7241,7 @@ async fn handle_text_message(
             shared_rate_limit_wait(&state_owned, chat_id).await;
 
             // ── Show only remaining delta + [Stopped] (unified rolling placeholder) ──
-            if full_response.len() < last_confirmed_len { last_confirmed_len = 0; }
+            if full_response.len() < last_confirmed_len || !full_response.is_char_boundary(last_confirmed_len) { last_confirmed_len = 0; }
             let remaining = &full_response[last_confirmed_len..];
             msg_debug(&format!("[rolling_ph] STOPPED: placeholder_msg_id={}, confirmed={}, remaining_len={}",
                 placeholder_msg_id, last_confirmed_len, remaining.trim().len()));
@@ -8937,8 +8937,8 @@ async fn execute_schedule(
             if !done {
                 // ── Rolling placeholder pattern (unified for all chats) ──
                 let threshold = file_attach_threshold();
-                if full_response.len() > last_confirmed_len && last_confirmed_len < threshold {
-                    let delta_end = full_response.len().min(threshold);
+                let delta_end = floor_char_boundary(&full_response, full_response.len().min(threshold));
+                if delta_end > last_confirmed_len {
                     let delta = &full_response[last_confirmed_len..delta_end];
                     let normalized_delta = normalize_empty_lines(delta);
                     let html_delta = markdown_to_telegram_html(&normalized_delta);
@@ -9021,7 +9021,7 @@ async fn execute_schedule(
 
             shared_rate_limit_wait(&state_owned, chat_id).await;
             // ── Show remaining delta + stopped (unified rolling placeholder) ──
-            if full_response.len() < last_confirmed_len { last_confirmed_len = 0; }
+            if full_response.len() < last_confirmed_len || !full_response.is_char_boundary(last_confirmed_len) { last_confirmed_len = 0; }
             let remaining = &full_response[last_confirmed_len..];
             if full_response.len() > file_attach_threshold() {
                 let notice = format!("\u{1f4c4} Response attached as file [Stopped]\n\nUse /{} to continue this schedule session.", schedule_id);
@@ -9049,7 +9049,7 @@ async fn execute_schedule(
             shared_rate_limit_wait(&state_owned, chat_id).await;
 
             // ── Send only remaining delta (unified rolling placeholder) ──
-            if full_response.len() < last_confirmed_len { last_confirmed_len = 0; }
+            if full_response.len() < last_confirmed_len || !full_response.is_char_boundary(last_confirmed_len) { last_confirmed_len = 0; }
             let remaining = &full_response[last_confirmed_len..];
             msg_debug(&format!("[rolling_ph/sched] FINAL: placeholder_msg_id={}, confirmed={}, total={}, remaining_len={}",
                 placeholder_msg_id, last_confirmed_len, full_response.len(), remaining.trim().len()));
@@ -9721,8 +9721,8 @@ async fn process_bot_message(
                 if !done {
                     // ── Rolling placeholder pattern (unified for all chats) ──
                     let threshold = file_attach_threshold();
-                    if full_response.len() > last_confirmed_len && last_confirmed_len < threshold {
-                        let delta_end = full_response.len().min(threshold);
+                    let delta_end = floor_char_boundary(&full_response, full_response.len().min(threshold));
+                    if delta_end > last_confirmed_len {
                         let delta = &full_response[last_confirmed_len..delta_end];
                         let normalized_delta = normalize_empty_lines(delta);
                         let html_delta = markdown_to_telegram_html(&normalized_delta);
@@ -9792,7 +9792,7 @@ async fn process_bot_message(
                     bmsg_id_for_log, final_response.len(), TELEGRAM_MSG_LIMIT));
 
                 // ── Send only remaining delta (unified rolling placeholder) ──
-                if full_response.len() < last_confirmed_len { last_confirmed_len = 0; }
+                if full_response.len() < last_confirmed_len || !full_response.is_char_boundary(last_confirmed_len) { last_confirmed_len = 0; }
                 let remaining = &full_response[last_confirmed_len..];
                 msg_debug(&format!("[rolling_ph/botmsg] FINAL: placeholder_msg_id={}, confirmed={}, total={}, remaining_len={}",
                     placeholder_msg_id, last_confirmed_len, full_response.len(), remaining.trim().len()));
@@ -9944,7 +9944,7 @@ async fn process_bot_message(
             shared_rate_limit_wait(&state_owned, chat_id).await;
 
             // ── Show remaining delta + [Stopped] (unified rolling placeholder) ──
-            if full_response.len() < last_confirmed_len { last_confirmed_len = 0; }
+            if full_response.len() < last_confirmed_len || !full_response.is_char_boundary(last_confirmed_len) { last_confirmed_len = 0; }
             let remaining = &full_response[last_confirmed_len..];
             msg_debug(&format!("[rolling_ph/botmsg] STOPPED: placeholder_msg_id={}, confirmed={}, remaining_len={}",
                 placeholder_msg_id, last_confirmed_len, remaining.trim().len()));
