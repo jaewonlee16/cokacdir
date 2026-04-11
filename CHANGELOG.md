@@ -1,5 +1,17 @@
 # Changelog — cokacdir
 
+## 0.4.85 — 2026-04-11
+
+- **OpenCode background tasks now actually complete.** When using the oh-my-opencode plugin, messages that dispatched a background task (e.g. "I'll report back when it's done") previously left the turn hanging forever because the one-shot `opencode run` process was torn down as soon as the parent session went idle, interrupting the background sub-session mid-flight. The OpenCode adapter was reworked to spawn `opencode serve` per turn, drive the session over HTTP + SSE, and wait until the parent session, all child sessions, and all todos are idle before shutting down — so background task notifications make it back to the user and the final answer is delivered end-to-end.
+- Fixed: OpenCode `--session <id>` was silently ignored when combined with `--continue`, causing cross-session routing into whichever root session was most recent. `--continue` is no longer passed alongside `--session`.
+- Fixed: OpenCode responses that ended with a legitimate non-"stop" finish reason (`length`, `content-filter`, `error`) were misreported as "empty response" errors. These are now treated as terminal like OpenCode itself does.
+- Fixed: a recoverable OpenCode error (e.g. `ContextOverflowError` that auto-compaction recovers from) could poison an otherwise successful turn. Error events are now tentative until the turn ends and are only surfaced when no usable output arrived.
+- Fixed: OpenCode calls with a stale `--session` id used to exit cleanly with an empty stdout while writing `NotFoundError` to stderr, surfacing as a confusing "empty response". The stderr message is now reported as the actual error.
+- Improved: OpenCode empty-response diagnostics now include the last finish reason, event/tool counters, last event type, output-token count, and exit code, making it possible to tell at a glance why a turn produced no text.
+- The legacy `opencode run` path is preserved and can be forced with `COKACDIR_OPENCODE_LEGACY=1` as a rollback escape hatch.
+
+---
+
 ## 0.4.84 — 2026-04-10
 
 - Fixed: streaming AI responses could panic with "byte index is not a char boundary" when a multi-byte character (emoji, CJK text) happened to straddle the rolling-placeholder threshold or when `full_response` was replaced by an error message mid-stream. All nine `full_response` slicing sites across the text, schedule, and bot-to-bot polling loops now floor to a valid UTF-8 char boundary and reset `last_confirmed_len` if it no longer points at a valid boundary in the current response.
