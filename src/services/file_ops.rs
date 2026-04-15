@@ -6,7 +6,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
+use filetime::{self, FileTime};
+
 use crate::utils::format::strip_unc_prefix;
+
+/// Preserve modification time and access time from source metadata to destination path.
+pub fn preserve_timestamps(dest: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    let mtime = FileTime::from_last_modification_time(metadata);
+    let atime = FileTime::from_last_access_time(metadata);
+    filetime::set_file_times(dest, atime, mtime)?;
+    Ok(())
+}
 
 /// Check if an error is a cross-device rename error
 #[cfg(unix)]
@@ -240,6 +250,9 @@ where
         fs::set_permissions(dest, metadata.permissions())?;
     }
 
+    // Preserve timestamps (mtime, atime)
+    let _ = preserve_timestamps(dest, &metadata);
+
     Ok(copied)
 }
 
@@ -284,6 +297,9 @@ pub fn copy_dir_recursive_with_progress(
             {
                 if src_path.is_file() {
                     fs::copy(&src_path, &dest_path)?;
+                    if let Ok(target_meta) = fs::metadata(&src_path) {
+                        let _ = preserve_timestamps(&dest_path, &target_meta);
+                    }
                 }
             }
 
@@ -345,6 +361,11 @@ pub fn copy_dir_recursive_with_progress(
                 }
             }
         }
+    }
+
+    // Preserve directory timestamps (must be done after all contents are copied)
+    if let Ok(src_metadata) = fs::metadata(src) {
+        let _ = preserve_timestamps(dest, &src_metadata);
     }
 
     Ok(())
@@ -727,12 +748,13 @@ pub fn copy_file(src: &Path, dest: &Path) -> io::Result<()> {
         ));
     }
 
+    let src_metadata = fs::metadata(src)?;
+
     // Check for special files (device files, sockets, etc.) that cannot be copied
     #[cfg(unix)]
     {
-        let metadata = fs::metadata(src)?;
         use std::os::unix::fs::FileTypeExt;
-        let file_type = metadata.file_type();
+        let file_type = src_metadata.file_type();
         if file_type.is_block_device()
             || file_type.is_char_device()
             || file_type.is_fifo()
@@ -745,12 +767,16 @@ pub fn copy_file(src: &Path, dest: &Path) -> io::Result<()> {
         }
     }
 
-    if src.is_dir() {
-        copy_dir_recursive(src, dest)
+    if src_metadata.is_dir() {
+        // copy_dir_recursive preserves timestamps for all entries including the top-level dir
+        copy_dir_recursive(src, dest)?;
     } else {
         fs::copy(src, dest)?;
-        Ok(())
+        // Preserve timestamps (mtime, atime)
+        let _ = preserve_timestamps(dest, &src_metadata);
     }
+
+    Ok(())
 }
 
 /// Maximum recursion depth for directory copy to prevent stack overflow
@@ -809,13 +835,23 @@ fn copy_dir_recursive_inner(
                 // On non-Unix, just skip symlinks or copy as regular file
                 if src_path.is_file() {
                     fs::copy(&src_path, &dest_path)?;
+                    if let Ok(target_meta) = fs::metadata(&src_path) {
+                        let _ = preserve_timestamps(&dest_path, &target_meta);
+                    }
                 }
             }
         } else if metadata.is_dir() {
             copy_dir_recursive_inner(&src_path, &dest_path, visited, depth + 1)?;
         } else {
             fs::copy(&src_path, &dest_path)?;
+            // Preserve file timestamps
+            let _ = preserve_timestamps(&dest_path, &metadata);
         }
+    }
+
+    // Preserve directory timestamps (must be done after all contents are copied)
+    if let Ok(src_metadata) = fs::metadata(src) {
+        let _ = preserve_timestamps(dest, &src_metadata);
     }
 
     Ok(())

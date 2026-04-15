@@ -1,6 +1,6 @@
 [package]
 name = "cokacdir"
-version = "0.4.87"
+version = "0.4.88"
 edition = "2021"
 authors = ["cokac <monogatree@gmail.com>"]
 description = "Telegram/Discord bot that runs Claude Code, Codex, Gemini, and Opencode, with a multi-panel terminal file manager"
@@ -43,6 +43,7 @@ teloxide = { version = "0.13", default-features = false, features = ["macros", "
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "http", "model", "builder", "cache", "rustls_backend"] }
 fs2 = "0.4"
+filetime = "0.2"
 rusqlite = { version = "0.31", features = ["bundled"] }
 
 [target.'cfg(unix)'.dependencies]

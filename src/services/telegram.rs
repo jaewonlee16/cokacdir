@@ -8193,7 +8193,19 @@ fn format_tool_input(name: &str, input: &str) -> String {
     }
 
     let Ok(v) = serde_json::from_str::<serde_json::Value>(input) else {
-        return format!("{} {}", name, input);
+        // Non-JSON input — Codex tools produce human-readable strings directly
+        return match name {
+            "WebSearch" => {
+                if input.is_empty() { "Search".to_string() }
+                else { format!("Search: {}", input) }
+            }
+            n if n.starts_with("Collab:") => {
+                let tool = n.strip_prefix("Collab:").unwrap_or(n);
+                if input.is_empty() { format!("Agent: {}", tool) }
+                else { format!("Agent {}: {}", tool, input) }
+            }
+            _ => format!("{} {}", name, input),
+        };
     };
 
     match name {
@@ -8349,7 +8361,17 @@ fn format_tool_input(name: &str, input: &str) -> String {
             "List tasks".to_string()
         }
         _ => {
-            format!("{} {}", name, input)
+            // Codex Collab:* tools — input is prompt text (or empty)
+            if name.starts_with("Collab:") {
+                let collab_tool = name.strip_prefix("Collab:").unwrap_or(name);
+                if input.is_empty() {
+                    format!("Agent: {}", collab_tool)
+                } else {
+                    format!("Agent {}: {}", collab_tool, input)
+                }
+            } else {
+                format!("{} {}", name, input)
+            }
         }
     }
 }

@@ -493,6 +493,10 @@ fn parse_codex_event(json: &Value) -> Vec<StreamMessage> {
         }
 
         // Ignored events — avoid duplicates (completed handles the final state)
+        // Note: item.updated is intentionally ignored because StreamMessage::Text
+        // appends to full_response. Processing todo_list updates would produce
+        // duplicate lists in the Telegram output. The final state is captured
+        // by item.completed → todo_list handler.
         "turn.started" | "item.started" | "item.updated" => vec![],
 
         // Unknown event types — ignore
@@ -535,7 +539,9 @@ fn parse_item_completed(json: &Value) -> Vec<StreamMessage> {
 
             let exit_code = item.get("exit_code")
                 .and_then(|v| v.as_i64());
-            let is_error = exit_code.map(|c| c != 0).unwrap_or(false);
+            let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let is_error = matches!(status, "failed" | "declined")
+                || exit_code.map(|c| c != 0).unwrap_or(false);
 
             vec![
                 StreamMessage::ToolUse {
@@ -548,10 +554,33 @@ fn parse_item_completed(json: &Value) -> Vec<StreamMessage> {
 
         // File change — Codex fields: changes (array of {path, kind, ...}), status
         "file_change" => {
-            vec![StreamMessage::ToolUse {
+            let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("completed");
+            let is_error = status == "failed";
+
+            let mut msgs = vec![StreamMessage::ToolUse {
                 name: "FileChange".to_string(),
                 input: item.to_string(),
-            }]
+            }];
+
+            // Only generate ToolResult on error (ToolUse already shows changes via format_tool_input)
+            if is_error {
+                let content = item.get("changes").and_then(|v| v.as_array())
+                    .filter(|arr| !arr.is_empty())
+                    .map(|changes| {
+                        changes.iter().map(|c| {
+                            let path = c.get("path").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            let kind = c.get("kind").and_then(|v| v.as_str()).unwrap_or("update");
+                            format!("{}: {}", kind, path)
+                        }).collect::<Vec<_>>().join("\n")
+                    })
+                    .unwrap_or_else(|| "File change failed".to_string());
+                msgs.push(StreamMessage::ToolResult {
+                    content,
+                    is_error: true,
+                });
+            }
+
+            msgs
         }
 
         // MCP tool call — Codex fields: server, tool, arguments, result{content,structured_content}, error{message}, status
@@ -601,17 +630,70 @@ fn parse_item_completed(json: &Value) -> Vec<StreamMessage> {
         // Codex fields: tool, sender_thread_id, receiver_thread_ids, prompt, agents_states, status
         "collab_tool_call" => {
             let tool = item.get("tool").and_then(|v| v.as_str()).unwrap_or("unknown");
-            vec![StreamMessage::ToolUse {
+            // Extract prompt for tools that carry one; leave empty for others
+            // (tool name is already in the Collab:{tool} name field — no need to repeat)
+            let display = match tool {
+                "spawn_agent" | "send_input" | "send_message" | "followup_task" => {
+                    item.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                }
+                _ => String::new(), // wait, close_agent, list_agents, wait_agent
+            };
+
+            let mut msgs = vec![StreamMessage::ToolUse {
                 name: format!("Collab:{}", tool),
-                input: item.to_string(),
-            }]
+                input: display,
+            }];
+
+            // For agent-state tools, extract agent messages from agents_states
+            if matches!(tool, "wait" | "close_agent" | "wait_agent" | "list_agents") {
+                if let Some(states) = item.get("agents_states").and_then(|v| v.as_object()) {
+                    let agent_msgs: Vec<String> = states.values().filter_map(|state| {
+                        state.get("message").and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                    }).collect();
+                    if !agent_msgs.is_empty() {
+                        msgs.push(StreamMessage::ToolResult {
+                            content: agent_msgs.join("\n---\n"),
+                            is_error: false,
+                        });
+                    }
+                }
+            }
+
+            msgs
         }
 
         // Web search — Codex fields: id, query, action
+        // Note: display is the raw query/URL without prefix — format_tool_input()
+        // in telegram.rs adds the "Search:" prefix to avoid duplication.
         "web_search" => {
+            let query = item.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let display = if !query.is_empty() {
+                let action_type = item.get("action")
+                    .and_then(|a| a.get("type"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if action_type == "search" {
+                    // Include expanded queries if available
+                    item.get("action")
+                        .and_then(|a| a.get("queries"))
+                        .and_then(|v| v.as_array())
+                        .filter(|arr| !arr.is_empty())
+                        .map(|arr| arr.iter()
+                            .filter_map(|q| q.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "))
+                        .unwrap_or_else(|| query.to_string())
+                } else {
+                    query.to_string()
+                }
+            } else {
+                String::new()
+            };
             vec![StreamMessage::ToolUse {
                 name: "WebSearch".to_string(),
-                input: item.to_string(),
+                input: display,
             }]
         }
 

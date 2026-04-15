@@ -4381,7 +4381,15 @@ impl App {
                                     crate::services::file_ops::copy_dir_recursive(&entry_src, &entry_dest)?;
                                 } else {
                                     std::fs::copy(&entry_src, &entry_dest)?;
+                                    // Preserve file timestamps
+                                    if let Ok(meta) = std::fs::metadata(&entry_src) {
+                                        let _ = crate::services::file_ops::preserve_timestamps(&entry_dest, &meta);
+                                    }
                                 }
+                            }
+                            // Preserve directory timestamps
+                            if let Ok(meta) = std::fs::metadata(&src) {
+                                let _ = crate::services::file_ops::preserve_timestamps(&dest, &meta);
                             }
                             Ok(())
                         })
@@ -4389,7 +4397,12 @@ impl App {
                     // Use create_new to ensure we never overwrite
                     std::fs::File::create_new(&dest)
                         .and_then(|_| std::fs::copy(&src, &dest))
-                        .map(|_| ())
+                        .map(|_| {
+                            // Preserve file timestamps
+                            if let Ok(meta) = std::fs::metadata(&src) {
+                                let _ = crate::services::file_ops::preserve_timestamps(&dest, &meta);
+                            }
+                        })
                 };
 
                 match result {

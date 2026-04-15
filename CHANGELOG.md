@@ -1,5 +1,14 @@
 # Changelog — cokacdir
 
+## 0.4.88 — 2026-04-15
+
+- **File copy now preserves timestamps.** All copy operations (single file, directory recursive, paste) now retain the original modification and access times using the `filetime` crate. Directory timestamps are set after contents are fully copied to avoid being overwritten by child writes.
+- **Codex streaming: improved tool display.** Codex `file_change` events now emit a ToolResult summary listing each changed file and its kind (add/update/delete). `collab_tool_call` events display human-readable prompts for spawn/send/followup tools and extract agent response messages from `agents_states` on wait/close. `web_search` events show the actual query text (or expanded queries) instead of raw JSON. `command_execution` error detection now also checks the `status` field for "failed"/"declined".
+- Fixed: Codex Collab tool display showed redundant text like "Agent wait: wait" instead of "Agent: wait" for tools whose display string equalled the tool name.
+- Fixed: Codex web_search with an empty `action.queries` array would lose the original query text, showing a bare "Search" label instead of the query.
+
+---
+
 ## 0.4.85 — 2026-04-11
 
 - **OpenCode background tasks now actually complete.** When using the oh-my-opencode plugin, messages that dispatched a background task (e.g. "I'll report back when it's done") previously left the turn hanging forever because the one-shot `opencode run` process was torn down as soon as the parent session went idle, interrupting the background sub-session mid-flight. The OpenCode adapter was reworked to spawn `opencode serve` per turn, drive the session over HTTP + SSE, and wait until the parent session, all child sessions, and all todos are idle before shutting down — so background task notifications make it back to the user and the final answer is delivered end-to-end.
